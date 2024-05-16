@@ -1,0 +1,1561 @@
+---
+title: "Appendix C: Analyses of incubation duration and hatching success on Bald Head Island, 1991-2023"
+subtitle: "Companion to *Recent increases in male sea turtle hatchling production on a North Carolina, USA beach despite a warming climate*"
+author: 
+  - name: "Dr. Matt Ware"
+    affiliation: "University of North Carolina Wilmington Center for Marine Science"
+    email: "warem@uncw.edu"
+    url: "https://WareResearch.com"
+  - name: "Paul Hillbrand"
+    affiliation: "Bald Head Island Conservancy"
+    email: "seaturtle@bhic.org"
+  - name: "Ali Johnson"
+    affiliation: "Bald Head Island Conservancy"
+    email: "alijohnson0123@gmail.com"
+  - name: "Dr. Stephanie Kamel"
+    affiliation: "University of North Carolina Wilmington Center for Marine Science"
+    email: "kamels@uncw.edu"
+  - name: "Dr. Beth Darrow"
+    affiliation: "Bald Head Island Conservancy"
+    email: "darrow@bhic.org"
+date: "`r Sys.Date()`"
+keywords: ["Bald Head Island", "Caretta caretta", "climate change", "demography", "feminization", "geographic information systems", "loggerhead turtle", "marine turtle", "maternal effects", "nest site selection", "North Carolina", "sex ratios", "threat assessment"]
+output: 
+  html_document:
+    theme: journal
+    toc: true
+    toc_depth: 4
+    number_sections: true
+    toc_float: true
+  pdf_document:
+    toc: true
+    toc_depth: 4
+    number_sections: true
+  word_document:
+    toc: false
+    number_sections: false
+geometry: margin=1in 
+always_allow_html: true
+urlcolor: blue
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = FALSE)
+
+
+# Export Options
+
+knitHTML <- TRUE
+exportPlots <- FALSE
+exportShapefiles <- FALSE
+
+```
+  
+# DESCRIPTION  
+  
+Environmental conditions play a critical role in sea turtle embryonic development, controlling incubation temperature, moisture, gas exchange, salinity, and other variables to which the developing embryos must respond. Temperature, in particular, has a long-established link to hatchling sex ratios and mortality rates. The role of moisture from either waves or rainfall has been gaining increased attention in light of climate change concerns as a potential means to mediate feminization and mortality issues at tropical beaches.  
+  
+Reneker and Kamel (2016a) investigated loggerhead turtle incubation temperature trends on Bald Head Island from 1991 to 2015 and extrapolated these values to hatchling sex ratios. During the peak of the nesting season (June - August), they reported an increasing trend in mean temperature (+0.09$^\circ C\ y^{-1}$) and a decreasing trend in total precipitation (-5.35 mm y^-1^). Incubation durations demonstrated a significant declining trend through the 25-yr dataset (n = 1347 *C. caretta* nests) with durations dropping from 59.2 $\pm$ 0.4 days in 1991 to 52.5 $\pm$ 0.5 days in 2015. Such averages correspond to 55% and 88% female hatchlings, respectively. Despite an increasing trend in air temperature and decreasing trend in precipitation during the same time period, the date of first nesting and hatching success showed no significant temporal trends. Reneker and Kamel (2016b) noted a significant maternal identity effect among repeat nesters which dominated any other factor.  
+  
+However, since the publication of these two manuscripts, incubation durations - and therefore estimated male hatchling production - has increased despite a continued warming trend. A range of environmental, behavioral, and physiological variables were investigated to determine why.  
+  
+**Reneker J, Kamel S (2016a) Climate change increases the production of female hatchlings at a northern sea turtle rookery. Ecology 97: 3257-3264. DOI: https://doi.org/10.1002/ecy.1603**  
+  
+**Reneker J, Kamel S (2016b) The Maternal Legacy: Female identity predicts offspring sex ratio in the loggerhead sea turtle. Scientific Reports 6: 29237. DOI: https://doi.org/10.1038/srep29237.**  
+  
+# LIBRARIES AND DATA IMPORT  
+  
+The following libraries were used throughout the subsequent analyses.  
+  
+```{r libraries, message = FALSE, warning = FALSE, results = FALSE, echo = TRUE}
+
+library(datetimeutils)
+library(DHARMa)
+library(dplyr)
+library(emmeans)
+library(ggplot2)
+library(glmmTMB)
+library(janitor)
+library(knitr)
+library(mgcv)
+library(MuMIn)
+library(psych)
+library(readxl)
+library(report)
+
+```
+```{r useful_functions, echo = FALSE}
+
+IncDur_SexRatio <- function(Duration_Days, beta_0 = 19.6890, beta_1 = -0.3290){ # Return the percent female hatchling sex ratio
+  round((exp(beta_0 + (beta_1 * Duration_Days))) / (1 + (exp(beta_0 + (beta_1 * Duration_Days)))), 3) * 100
+}
+
+```
+  
+A meteorological record for Bald Head Island was generated in Appendix A. Maximum air temperature is available starting in 1991 with average air temperature and precipitation available since 2002. 
+  
+```{r BHI_importMet, warning = FALSE, message = FALSE}
+
+BHI_Met <- read.csv("Appendix B Meteorological time series for Bald Head Island 1991-2023.csv", header = TRUE) 
+
+BHI_Met <- janitor::clean_names(BHI_Met)
+
+BHI_Met$date <- as.POSIXct(BHI_Met$date, format = "%m/%d/%Y")
+BHI_Met$max_air_temp <- as.numeric(BHI_Met$max_air_temp)
+BHI_Met$min_air_temp <- as.numeric(BHI_Met$min_air_temp)
+BHI_Met$avg_air_temp <- as.numeric(BHI_Met$avg_air_temp)
+BHI_Met$precipitation <- as.numeric(BHI_Met$precipitation)
+BHI_Met$avg_wind_speed <- as.numeric(BHI_Met$avg_wind_speed)
+BHI_Met$avg_wind_direction <- as.numeric(BHI_Met$avg_wind_direction)
+BHI_Met$max_solar_radiation <- as.numeric(BHI_Met$max_solar_radiation)
+
+```
+  
+Nesting data on Bald Head Island since 1991 includes the date the nest was laid, any disturbances including predation and wave overwash or erosion (i.e., washout), the date the nest hatched, incubation duration, clutch size, hatching and emergence success, beach zone, alongshore and cross-shore nest placement, nest elevation, and maternal identity.  
+  
+```{r data_import_crawls, warning = FALSE, message = FALSE}
+
+## Import Bald Head Island Nesting Data
+BHI_Cc_Nests <- readxl::read_excel("BHI Nesting Data.xlsx", sheet = "1991-2023") 
+
+BHI_Cc_Nests <- janitor::clean_names(BHI_Cc_Nests)
+
+# Convert data columns into appropriate R data types
+
+#BHI_Cc_Nests$date_laid <- convert_date(as.numeric(BHI_Cc_Nests$date_laid), type = "Excel", fraction = FALSE, tz = "America/New_York")
+#BHI_Cc_Nests$day_laid <- as.numeric(BHI_Cc_Nests$day_laid)
+#BHI_Cc_Nests$week_laid <- as.numeric(BHI_Cc_Nests$week_laid)
+#BHI_Cc_Nests$in_situ_relocated <- factor(BHI_Cc_Nests$in_situ_relocated, levels = c("In situ", "Relocated"))
+#BHI_Cc_Nests$predated <- factor(BHI_Cc_Nests$predated, levels = c("No", "Yes"))
+#BHI_Cc_Nests$roots <- factor(BHI_Cc_Nests$roots, levels = c("No", "Yes", NA))
+#BHI_Cc_Nests$scattered_by_turtle <- factor(BHI_Cc_Nests$scattered_by_turtle, levels = c("No", "Yes", NA))
+#BHI_Cc_Nests$poached <- factor(BHI_Cc_Nests$poached, levels = c("No", "Yes", NA))
+#BHI_Cc_Nests$washed_over <- factor(BHI_Cc_Nests$washed_over, levels = c("No", "Yes", NA))
+#BHI_Cc_Nests$washout_complete <- factor(BHI_Cc_Nests$washout_complete, levels = c("No", "Yes", NA))
+#BHI_Cc_Nests$washout_partial <- factor(BHI_Cc_Nests$washout_partial, levels = c("No", "Yes", NA))
+#BHI_Cc_Nests$washout_post_hatch_pre_inventory <- factor(BHI_Cc_Nests$washout_post_hatch_pre_inventory, levels = c("No", "Yes", NA))
+BHI_Cc_Nests$day_emerge <- as.numeric(BHI_Cc_Nests$day_emerge)
+BHI_Cc_Nests$week_emerge <- as.numeric(BHI_Cc_Nests$week_emerge)
+BHI_Cc_Nests$incubation_duration <- as.numeric(BHI_Cc_Nests$incubation_duration)
+BHI_Cc_Nests$clutch_size <- as.numeric(BHI_Cc_Nests$clutch_size)
+BHI_Cc_Nests$hatched_n_success <- as.numeric(BHI_Cc_Nests$hatched_n_success)
+BHI_Cc_Nests$hatched_n_fail <- as.numeric(BHI_Cc_Nests$hatched_n_fail)
+BHI_Cc_Nests$hatching_prop <- as.numeric(BHI_Cc_Nests$hatching_prop)
+BHI_Cc_Nests$emerged_n_success <- as.numeric(BHI_Cc_Nests$emerged_n_success)
+BHI_Cc_Nests$emerged_n_fail <- as.numeric(BHI_Cc_Nests$emerged_n_fail)
+BHI_Cc_Nests$emergence_prop <- as.numeric(BHI_Cc_Nests$emergence_prop)
+#BHI_Cc_Nests$coding_start <- convert_date(as.numeric(BHI_Cc_Nests$coding_start), type = "Excel", fraction = FALSE, tz = "America/New_York")
+#BHI_Cc_Nests$coding_end <- convert_date(as.numeric(BHI_Cc_Nests$coding_end), type = "Excel", fraction = FALSE, tz = "America/New_York")
+#BHI_Cc_Nests$zone <- as.numeric(BHI_Cc_Nests$zone)
+BHI_Cc_Nests$beach_distance_m <- as.numeric(BHI_Cc_Nests$beach_distance_m)
+BHI_Cc_Nests$dem_avg <- as.numeric(BHI_Cc_Nests$dem_avg)
+BHI_Cc_Nests$dist_dune <- as.numeric(BHI_Cc_Nests$dist_dune)
+
+```
+  
+# METEOROLOGY DURING INCUBATION  
+  
+The meteorological data utilized in Reneker and Kamel (2016a) is no longer available at the link provided in the manuscript and the GPS coordinates do not correspond to any recent weather station location. For this follow-up, daily meteorological data coincident with each nest was integrated based on available data from several weather stations either on or in proximity to Bald Head Island. Full meteorological data (i.e., Max/Min/Avg air temperature, Precipitation, Wind Speed/Direction, Maximum Solar Radiation) for the island is available starting 24 June 2015 from stations monitored by North Carolina State University and the State Climate Office. All variables except solar radiation are available starting 24 February 2002 from the Brunswick Airport. Average air temperature begins 18 January 2002 from Sunny Point Military Terminal, and Max/Min air temperature is available for the full observed date range from the Southport COOP.  
+  
+After appending meteorological conditions coincident with each nest's incubation, outliers experiencing extreme mean/max daily air temperatures or total precipitation were removed.  
+  
+```{r BHI_metDuring, warning = FALSE, message = FALSE}
+
+BHI_Cc_Nests <- BHI_Cc_Nests %>%
+  filter(!is.na(coding_start) & !is.na(coding_end))
+
+missingThreshold <- 25
+
+bhiNestMet <- matrix(NA, nrow = length(BHI_Cc_Nests$coding_start), ncol = 6)
+
+for(i in 1:nrow(bhiNestMet)){
+  temp <- BHI_Met %>% filter(date >= BHI_Cc_Nests$coding_start[i] & 
+                               date <= BHI_Cc_Nests$coding_end[i])
+  
+  meanAvgAir <- round(mean(temp$avg_air_temp, na.rm = TRUE), 1)
+  missAvgTemp <- round(length(temp$avg_air_temp[is.na(temp$avg_air_temp)]) / length(temp$date), 3) * 100
+  
+  meanMaxAir <- round(mean(temp$max_air_temp, na.rm = TRUE), 1)
+  missMaxTemp <- round(length(temp$max_air_temp[is.na(temp$max_air_temp)]) / length(temp$date), 3) * 100
+  
+  sumPrecip <- round(sum(temp$precipitation, na.rm = TRUE), 1)
+  missPrecip <- round(length(temp$precipitation[is.na(temp$precipitation)]) / length(temp$date), 3) * 100
+  
+  bhiNestMet[i,] <- c(meanAvgAir, missAvgTemp, meanMaxAir, missMaxTemp, sumPrecip, missPrecip)
+}
+
+
+
+bhiNestMet <- as.data.frame(bhiNestMet)
+bhiNestMet <- bhiNestMet %>% mutate_all(~ifelse(is.infinite(.), NA, .))
+bhiNestMet <- bhiNestMet %>% mutate_all(~ifelse(is.nan(.), NA, .))
+
+colnames(bhiNestMet) <- c("mean_avg_air", "missing_avg_air", "mean_max_air", "missing_max_temp", "total_precip", "missing_precip")
+
+toReplace <- with(bhiNestMet, missing_avg_air > missingThreshold)
+bhiNestMet$mean_avg_air[toReplace] <- NA
+
+toReplace <- with(bhiNestMet, missing_max_temp > missingThreshold)
+bhiNestMet$mean_max_air[toReplace] <- NA
+
+toReplace <- with(bhiNestMet, missing_precip > missingThreshold)
+bhiNestMet$total_precip[toReplace] <- NA
+
+
+BHI_Cc_Nests <- cbind(BHI_Cc_Nests, bhiNestMet)
+
+
+```
+  
+```{r BHI_metDuring_summary}
+
+BHI_Cc_Nests_nestMet <- BHI_Cc_Nests %>%
+  group_by(year) %>%
+  summarise("mean_air_temp" = round(mean(mean_avg_air, na.rm = TRUE), 1), "mean_max_air" = round(mean(mean_max_air, na.rm = TRUE), 1), 
+            "mean_total_precip" = round(mean(total_precip, na.rm = TRUE), 1), "N" = n())
+
+BHI_Cc_Nests_nestMet <- as.data.frame(BHI_Cc_Nests_nestMet)
+BHI_Cc_Nests_nestMet <- BHI_Cc_Nests_nestMet %>% mutate_all(~ifelse(is.infinite(.), NA, .))
+BHI_Cc_Nests_nestMet <- BHI_Cc_Nests_nestMet %>% mutate_all(~ifelse(is.nan(.), NA, .))
+
+kable(BHI_Cc_Nests_nestMet, caption = "Average meteorology experienced by Bald Head Island nests, 1991 - 2023")
+
+```
+  
+```{r BHI_metDuring_plot, fig.width = 6, fig.height = 12, warning = FALSE, message = FALSE}
+
+m_BHI_nestMet_AvgAirxYear_predict <- predict.gam(gam(mean_avg_air ~ s(year), data = BHI_Cc_Nests, family = "gaussian"), 
+                                                        newdata = list(year = seq(from = 2002, to = 2023, by = 1)), se.fit = TRUE)
+m_BHI_nestMet_AvgAirxYear_upper <- m_BHI_nestMet_AvgAirxYear_predict$fit + (1.96 * m_BHI_nestMet_AvgAirxYear_predict$se.fit) # Estimates upper bound of 95% CI
+m_BHI_nestMet_AvgAirxYear_lower <- m_BHI_nestMet_AvgAirxYear_predict$fit - (1.96 * m_BHI_nestMet_AvgAirxYear_predict$se.fit) # Estimates lower bound of 95% CI
+
+
+m_BHI_nestMet_MaxAirxYear_predict <- predict.gam(gam(mean_max_air ~ s(year), data = BHI_Cc_Nests, family = "gaussian"), 
+                                                        newdata = list(year = seq(from = 1991, to = 2023, by = 1)), se.fit = TRUE)
+m_BHI_nestMet_MaxAirxYear_upper <- m_BHI_nestMet_MaxAirxYear_predict$fit + (1.96 * m_BHI_nestMet_MaxAirxYear_predict$se.fit) # Estimates upper bound of 95% CI
+m_BHI_nestMet_MaxAirxYear_lower <- m_BHI_nestMet_MaxAirxYear_predict$fit - (1.96 * m_BHI_nestMet_MaxAirxYear_predict$se.fit) # Estimates lower bound of 95% CI
+
+
+m_BHI_nestMet_PrecipxYear_predict <- predict.gam(gam(total_precip ~ s(year), data = BHI_Cc_Nests, family = "gaussian"), 
+                                                        newdata = list(year = seq(from = 2002, to = 2023, by = 1)), se.fit = TRUE)
+m_BHI_nestMet_PrecipxYear_upper <- m_BHI_nestMet_PrecipxYear_predict$fit + (1.96 * m_BHI_nestMet_PrecipxYear_predict$se.fit) # Estimates upper bound of 95% CI
+m_BHI_nestMet_PrecipxYear_lower <- m_BHI_nestMet_PrecipxYear_predict$fit - (1.96 * m_BHI_nestMet_PrecipxYear_predict$se.fit) # Estimates lower bound of 95% CI
+
+#--------------
+
+par(mfrow = c(3, 1), family = "serif", mar = c(4.5, 5.0, 3, 0.5), bty = "n", las = 1, cex.axis = 1.2, cex.lab = 1.3, cex.main = 1.3)
+
+plot(jitter(BHI_Cc_Nests$year, 1), BHI_Cc_Nests$mean_max_air, 
+     pch = 16, col = rgb(125, 125, 125, alpha = 80, maxColorValue = 255),
+     xlim = c(1990, 2025), xlab = "Year", ylim = c(25, 33), ylab = "Air Temperature (\u00b0C)", main = "")
+lines(c(1991:2023), m_BHI_nestMet_MaxAirxYear_predict$fit, lty = 1, lwd = 2, col = "blue")
+lines(c(1991:2023), m_BHI_nestMet_MaxAirxYear_upper, lty = 2, lwd = 1, col = "blue")
+lines(c(1991:2023), m_BHI_nestMet_MaxAirxYear_lower, lty = 2, lwd = 1, col = "blue")
+mtext("A. Maximum Air Temperature", side = 3, line = 1, adj = 0, outer = FALSE, cex = 1.3)
+
+
+plot(jitter(BHI_Cc_Nests$year, 1), BHI_Cc_Nests$mean_avg_air, 
+     pch = 16, col = rgb(125, 125, 125, alpha = 80, maxColorValue = 255),
+     xlim = c(1990, 2025), xlab = "Year", ylim = c(23, 30), ylab = "Air Temperature (\u00b0C)", main = "")
+lines(c(2002:2023), m_BHI_nestMet_AvgAirxYear_predict$fit, lty = 1, lwd = 2, col = "blue")
+lines(c(2002:2023), m_BHI_nestMet_AvgAirxYear_upper, lty = 2, lwd = 1, col = "blue")
+lines(c(2002:2023), m_BHI_nestMet_AvgAirxYear_lower, lty = 2, lwd = 1, col = "blue")
+mtext("B. Average Air Temperature", side = 3, line = 1, adj = 0, outer = FALSE, cex = 1.3)
+
+
+plot(jitter(BHI_Cc_Nests$year, 1), BHI_Cc_Nests$total_precip, 
+     pch = 16, col = rgb(125, 125, 125, alpha = 80, maxColorValue = 255),
+     xlim = c(1990, 2025), xlab = "Year", ylim = c(0, 400), ylab = "Total Rainfall (mm)", main = "")
+lines(c(2002:2023), m_BHI_nestMet_PrecipxYear_predict$fit, lty = 1, lwd = 2, col = "blue")
+lines(c(2002:2023), m_BHI_nestMet_PrecipxYear_upper, lty = 2, lwd = 1, col = "blue")
+lines(c(2002:2023), m_BHI_nestMet_PrecipxYear_lower, lty = 2, lwd = 1, col = "blue")
+mtext("C. Total Rainfall", side = 3, line = 1, adj = 0, outer = FALSE, cex = 1.3)
+
+```
+  
+```{r BHI_nestMet_removeOutliers}
+
+BHI_Cc_Nests_Clean <- BHI_Cc_Nests
+# start with 2469 nests
+
+outliers_MaxAir <- boxplot(BHI_Cc_Nests_Clean$mean_max_air, plot = FALSE)$out
+BHI_Cc_Nests_Clean <- BHI_Cc_Nests_Clean[-which(BHI_Cc_Nests_Clean$mean_max_air %in% outliers_MaxAir),]
+# Removes 4 nests
+
+outliers_AvgAir <- boxplot(BHI_Cc_Nests_Clean$mean_avg_air, plot = FALSE)$out
+BHI_Cc_Nests_Clean <- BHI_Cc_Nests_Clean[-which(BHI_Cc_Nests_Clean$mean_avg_air %in% outliers_AvgAir),]
+# Removes 86 additional nests
+
+outliers_Precip <- boxplot(BHI_Cc_Nests_Clean$total_precip, plot = FALSE)$out
+BHI_Cc_Nests_Clean <- BHI_Cc_Nests_Clean[-which(BHI_Cc_Nests_Clean$total_precip %in% outliers_Precip),]
+# Removes 23 additional nest
+
+```
+  
+## Meteorological Trends  
+  
+**Average Daily Maximum Air Temperature**  
+  
+All loggerhead nests on Bald Head Island have been experiencing a significantly increasing trend in average daily maximum air temperatures (GAM p << 0.001, +0.129$^\circ C\ yr^{-1}$). 
+  
+```{r BHI_metDuring_undist_trendsMaxAir, message = FALSE}
+
+#invisible(DHARMa::simulateResiduals(gam(mean_max_air ~ s(year), data = BHI_Cc_Nests_Clean), n = 5000, plot = TRUE)) # what is up with the residuals?
+
+summary(gam(mean_max_air ~ s(year), data = BHI_Cc_Nests_Clean))
+
+paste0("Linear estimation of maximum air temperature (\u00B0C) increase per year: ", 
+       round(summary(lm(mean_max_air ~ year, data = BHI_Cc_Nests_Clean))$coef[2,1], 3))
+
+```
+  
+**Average Daily Mean Air Temperature**  
+  
+Average daily mean air temperatures have been increasing as well, though at a slower pace (+0.030 $^\circ C\ yr^{-1}$) and with notable oscillations (GAM p << 0.001).  
+  
+```{r BHI_metDuring_undist_trendsAvgAir, message = FALSE}
+
+#invisible(DHARMa::simulateResiduals(gam(mean_avg_air ~ s(year), data = BHI_Cc_Nests_Clean), n = 5000, plot = TRUE)) # what is up with the residuals?
+
+summary(gam(mean_avg_air ~ s(year), data = BHI_Cc_Nests_Clean))
+
+paste0("Linear estimation of maximum air temperature (\u00B0C) increase per year: ", 
+       round(summary(lm(mean_avg_air ~ year, data = BHI_Cc_Nests_Clean))$coef[2,1], 3))
+
+```
+  
+**Average Total Precipitation**  
+  
+Average total precipitation during incubation has also increased (+6.69 mm y^-1^), but with substantial oscillation (GAM p << 0.001).  
+  
+```{r BHI_metDuring_undist_trendsPrecip, message = FALSE}
+
+#invisible(DHARMa::simulateResiduals(gam(total_precip ~ s(year), data = BHI_Cc_Nests_Clean), n = 5000, plot = TRUE)) # what is up with the residuals?
+
+summary(gam(total_precip ~ s(year), data = BHI_Cc_Nests_Clean))
+
+paste0("Linear estimation of total precipitation (mm) increase per year: ", 
+       round(summary(lm(total_precip ~ year, data = BHI_Cc_Nests_Clean))$coef[2,1], 3))
+
+```
+  
+## Five-Year Averages  
+  
+Five-year moving averages are presented to smooth out interannual variability and provide additional data for use in subsequent analyses.  
+  
+```{r met_5yrMovingAverage}
+
+met_5yrMovingAvg <- matrix(data = NA, nrow = 29, ncol = 8)
+yearStart <- seq(from = 1991, to = 2019, by = 1)
+yearEnd <- seq(from = 1995, to = 2023, by = 1)
+
+met_5yrMovingAvg[,1] <- yearStart; met_5yrMovingAvg[,2] <- yearEnd
+
+for(i in 1:length(yearStart)){
+  met_5yrMovingAvg[i, 3] <- round(mean(BHI_Cc_Nests[which(BHI_Cc_Nests$year >= yearStart[i] &
+                                                                      BHI_Cc_Nests$year <= yearEnd[i]),]$mean_avg_air, na.rm = TRUE), 1)
+  met_5yrMovingAvg[i, 4] <- round(sd(BHI_Cc_Nests[which(BHI_Cc_Nests$year >= yearStart[i] &
+                                                                      BHI_Cc_Nests$year <= yearEnd[i]),]$mean_avg_air, na.rm = TRUE), 1)
+  met_5yrMovingAvg[i, 5] <- round(mean(BHI_Cc_Nests[which(BHI_Cc_Nests$year >= yearStart[i] &
+                                                                      BHI_Cc_Nests$year <= yearEnd[i]),]$mean_max_air, na.rm = TRUE), 1)
+  met_5yrMovingAvg[i, 6] <- round(sd(BHI_Cc_Nests[which(BHI_Cc_Nests$year >= yearStart[i] &
+                                                                      BHI_Cc_Nests$year <= yearEnd[i]),]$mean_max_air, na.rm = TRUE), 1)
+  met_5yrMovingAvg[i, 7] <- round(mean(BHI_Cc_Nests[which(BHI_Cc_Nests$year >= yearStart[i] &
+                                                                      BHI_Cc_Nests$year <= yearEnd[i]),]$total_precip, na.rm = TRUE), 1)
+  met_5yrMovingAvg[i, 8] <- round(sd(BHI_Cc_Nests[which(BHI_Cc_Nests$year >= yearStart[i] &
+                                                                      BHI_Cc_Nests$year <= yearEnd[i]),]$total_precip, na.rm = TRUE), 1)
+}
+
+met_5yrMovingAvg <- as.data.frame(met_5yrMovingAvg)
+met_5yrMovingAvg <- met_5yrMovingAvg %>% mutate_all(~ifelse(is.infinite(.), NA, .))
+met_5yrMovingAvg <- met_5yrMovingAvg %>% mutate_all(~ifelse(is.nan(.), NA, .))
+met_5yrMovingAvg[c(8:11), c(3,4, 7, 8)] <- NA # Average air temp and rainfall data not available until 2002, so these rows/columns contain incomplete data
+
+
+colnames(met_5yrMovingAvg) <- c("Year Start", "Year End", "Mean Avg Temp", "SD Avg Temp", "Mean Max Temp", "SD Max Temp", "Mean Total Rain", "SD Total Rain")
+
+knitr::kable(met_5yrMovingAvg, caption = "5-Year Averages of Meteorological Conditions on Bald Head Island")
+
+```
+  
+***  
+  
+# INCUBATION DURATION  
+  
+In the presented analysis, 1,186 nests (50.3%) were removed from the Bald Head Island loggerhead nest dataset due to relocation, predation, invasion by sea oat roots (*Uniola paniculata*), wave wash-over, wave wash-out, failure of the offspring to hatch from the egg or emerge from the nest, or missing lay date or incubation durations. No nests were reported to be scattered by another nesting female or poached. This left 1,170 nests from 1991 - 2023 available for analysis.  
+  
+Incubation durations between *in situ* and relocated nests which were otherwise undisturbed were significantly different (Relocated nests 1.4 days shorter on average, p << 0.001), hence the separation by relocation status mentioned above. However, relocation status alone only explains 1.9% of the observed variation in incubation durations.  
+  
+```{r isolate_BHI_Undist_IncDur}
+
+BHI_Undist_IncDur <- BHI_Cc_Nests_Clean %>% 
+  filter(in_situ_relocated != "NA") %>% 
+  filter(predated != "Yes") %>%
+  filter(roots != "Yes") %>% 
+  filter(scattered_by_turtle != "Yes") %>% 
+  filter(poached != "Yes") %>% 
+  filter(washout_complete != "Yes") %>% 
+  filter(washout_partial != "Yes") %>% 
+  filter(washout_post_hatch_pre_inventory != "Yes") %>% 
+  filter(washed_over != "Yes") %>% 
+  filter(!is.na(date_laid)) %>% 
+  filter(hatching_prop > 0) %>% 
+  filter(emergence_prop > 0) %>% 
+  filter(!is.na(incubation_duration)) 
+
+
+summary(lm(incubation_duration ~ in_situ_relocated, data = BHI_Undist_IncDur)) # test difference by relocation status
+# Significant difference in incubation duration between in situ and relocated nests. Relo -1.4 days, p << 0.001
+
+#---------------
+
+BHI_Undist_IncDur <- BHI_Cc_Nests_Clean %>% # Start with 2356 nests in Bald Head Island loggerhead nest dataset
+  filter(in_situ_relocated != "Relocated") %>% # Removes 616 relocated nests
+  filter(predated != "Yes") %>% # Removes 76 predated nests
+  filter(roots != "Yes") %>% # Removes 3 nests invaded by root nests
+  filter(scattered_by_turtle != "Yes") %>% # No incubating nests scattered by another turtle
+  filter(poached != "Yes") %>% # No nests were poached
+  filter(washout_complete != "Yes") %>% # Removes 118 remaining nests which were washed out completely
+  filter(washout_partial != "Yes") %>% # Removes 1 remaining nests which were partially washed out
+  filter(washout_post_hatch_pre_inventory != "Yes") %>% # No remaining nests washed out after hatching
+  filter(washed_over != "Yes") %>% # Removes 43 remaining nests which were washed over but remained intact
+  filter(!is.na(date_laid)) %>% # No nests with missing lay dates
+  filter(hatching_prop > 0) %>% # Removes 187 remaining nests which did not hatch
+  filter(emergence_prop > 0) %>% # Removes 19 remaining nests which did not emerge
+  filter(!is.na(incubation_duration)) %>% # 154 remaining nests which are missing incubation durations
+  filter(!is.na(zone))
+# Removed 1186 nests (50.3%), leaving 1170 (49.7%) loggerhead nests in the Bald Head Island dataset
+
+```
+  
+Overall, the current Bald Head Island dataset approximates a normal distribution.  
+  
+```{r IncDur_BHI_distribution, fig.width = 6, fig.height = 4}
+
+describe(BHI_Undist_IncDur$incubation_duration)
+
+par(mfrow = c(1, 1), family = "serif", mar = c(4.5, 5.0, 3, 0.5), bty = "n", las = 1, cex.axis = 1.2, cex.lab = 1.3, cex.main = 1.3)
+
+plot(density(BHI_Undist_IncDur$incubation_duration, na.rm = TRUE), lwd = 2, col = "black", xlim = c(40, 90), 
+     xlab = "Days", main = "Incubation Durations")
+lines(density(BHI_Cc_Nests[BHI_Cc_Nests$incubation_duration > 0,]$incubation_duration, na.rm = TRUE), lwd = 2, col = "red")
+legend("topright", legend = c("Undisturbed", "All Nests"), col = c("black", "red"), lwd = c(2,2), bty = "n")
+
+```
+  
+Incubation durations are variable from year to year. Observed annual mean incubation durations have ranged from 52.0 $\pm$ 0.7 days (2006) to 63.0 $\pm$ 4.4 days in 1996. The 2023 average was 55.1 $\pm$ 3.8 days.  
+  
+```{r IncDur_AnnualAverage_plot, fig.width = 6, fig.height = 4, warning = FALSE, message = FALSE}
+
+incDurxYear <- BHI_Undist_IncDur %>%
+  group_by(year) %>%
+  summarise("mean" = round(mean(incubation_duration), 1), "sd" = round(sd(incubation_duration), 1), "n" = n())
+
+ggplot() +
+  geom_point(data = incDurxYear, aes(x = year, y = mean), pch = 16, color = rgb(125, 125, 125, alpha = 75, maxColorValue = 255)) +  
+  geom_smooth(data = incDurxYear, aes(x = year, y = mean), lwd = 1, col = "black") +
+  ylim(50, 65) +
+  ylab("Incubation Duration (days)") +
+  xlim(1991, 2023) +
+  xlab("Year") +
+  theme_classic(base_size = 12)
+
+knitr::kable(incDurxYear, caption = "Average Incubation Durations on Bald Head Island by Year")
+
+```
+  
+Year is a significant variable with respect to incubation durations, but it is a poor descriptor as Year alone only explains 15.1% of the observed variance.
+  
+*Gaussian GAM*, $Duration = \beta_0 + f(Year) + \epsilon$  
+  
+```{r plot_incdur_bhi_undist, message = FALSE, warning = FALSE}
+
+summary(gam(incubation_duration ~ s(year), data = BHI_Undist_IncDur, family = "gaussian"))
+
+```
+  
+***The declining trend in Reneker and Kamel (2016) is not continued in the 2019 - 2023 Bald Head Island loggerhead nest data. The recent data is more in line with incubation durations from the mid-2000s.***  
+  
+## Five-Year Averages  
+  
+To help smooth out this variability, 5-year moving averages are presented below.  
+  
+```{r IncDur_5yrMovingAverage}
+
+incDurs_5yrMovingAvg <- matrix(data = NA, nrow = 29, ncol = 4)
+yearStart <- seq(from = 1991, to = 2019, by = 1)
+yearEnd <- seq(from = 1995, to = 2023, by = 1)
+
+incDurs_5yrMovingAvg[,1] <- yearStart; incDurs_5yrMovingAvg[,2] <- yearEnd
+
+for(i in 1:length(yearStart)){
+  incDurs_5yrMovingAvg[i, 3] <- round(mean(BHI_Undist_IncDur[which(BHI_Undist_IncDur$year >= yearStart[i] &
+                                                                      BHI_Undist_IncDur$year <= yearEnd[i]),]$incubation_duration, na.rm = TRUE), 1)
+  incDurs_5yrMovingAvg[i, 4] <- round(sd(BHI_Undist_IncDur[which(BHI_Undist_IncDur$year >= yearStart[i] &
+                                                                      BHI_Undist_IncDur$year <= yearEnd[i]),]$incubation_duration, na.rm = TRUE), 1)
+}
+
+incDurs_5yrMovingAvg <- as.data.frame(incDurs_5yrMovingAvg)
+incDurs_5yrMovingAvg <- incDurs_5yrMovingAvg %>% mutate_all(~ifelse(is.infinite(.), NA, .))
+incDurs_5yrMovingAvg <- incDurs_5yrMovingAvg %>% mutate_all(~ifelse(is.nan(.), NA, .))
+
+
+colnames(incDurs_5yrMovingAvg) <- c("Year Start", "Year End", "Mean Duration", "SD Duration")
+
+knitr::kable(incDurs_5yrMovingAvg, caption = "5-Year Averages of Incubation Durations on Bald Head Island")
+
+```
+  
+## Incubation Duration ~ f(Meteorological, Behavioral, and Maternal Variables)  
+  
+To test which meteorological variables are important drivers of incubation duration, a nested model selection approach using AICc was employed. The full GAM includes average daily mean air temperature and average total precipitation experienced during incubation, as well as Year, Day Laid, Distance from the Ferry Port, Distance from the Dune Toe, Elevation, Clutch Size, and Maternal Identity as additional covariates:  
+  
+*Gaussian GAM*,  
+$Duration_i = \beta_0 + f_1(Air_{avg,i}) + f_2(Precip_i) + f_3(Year_i) + f_4(DayLaid_i) + f_5(DistFerry_i) +$  
+$f_6(DistDune_i) +f_7(Elevation_i) + f_8(ClutchSize_i) + \beta_1(FemaleID_i) + \epsilon_i$  
+  
+Average daily maximum air temperature was not included in the model because it is highly correlated (88.2%) with average air temperature. A model including maximum air temperature was 23.5 AICc points higher than a model using mean air temperatures, indicating mean air temperature is the more informative variable.  
+  
+570 nests include observations for each of these variables. The best model includes all of these variables except maternal identity and cross-shore distance and explains 64% of the deviance. Removing any of the variables results in a significant increase in AICc.  
+  
+```{r BHI_incDur_removeOutliers}
+
+BHI_IncDur_Clean <- BHI_Undist_IncDur
+# start with 1170 nests
+
+outliers_Day <- boxplot(BHI_IncDur_Clean$day_laid, plot = FALSE)$out
+BHI_IncDur_Clean <- BHI_IncDur_Clean[-which(BHI_IncDur_Clean$day_laid %in% outliers_Day),]
+# Removes 1 nests
+
+outliers_Beach <- boxplot(BHI_IncDur_Clean$beach_distance_m, plot = FALSE)$out
+BHI_IncDur_Clean <- BHI_IncDur_Clean[-which(BHI_IncDur_Clean$beach_distance_m %in% outliers_Beach),]
+# Removes 37 additional nests
+
+outliers_Dune <- boxplot(BHI_IncDur_Clean$dist_dune, plot = FALSE)$out
+BHI_IncDur_Clean <- BHI_IncDur_Clean[-which(BHI_IncDur_Clean$dist_dune %in% outliers_Dune),]
+# Removes 67 additional nest
+
+outliers_DEM <- boxplot(BHI_IncDur_Clean$dem_avg, plot = FALSE)$out
+BHI_IncDur_Clean <- BHI_IncDur_Clean[-which(BHI_IncDur_Clean$dem_avg %in% outliers_DEM),]
+# Removes 15 additional nest
+
+outliers_Clutch <- boxplot(BHI_IncDur_Clean$clutch_size, plot = FALSE)$out
+BHI_IncDur_Clean <- BHI_IncDur_Clean[-which(BHI_IncDur_Clean$clutch_size %in% outliers_Clutch),]
+# Removes 15 additional nest
+
+```
+  
+```{r IncDur_BHI_modelFit_correlation, fig.width = 8, fig.height = 4, message = FALSE, warning = FALSE}
+
+BHI_Undist_IncDur_Full <- BHI_IncDur_Clean[which(!is.na(BHI_IncDur_Clean$mean_avg_air) &
+                                                    !is.na(BHI_IncDur_Clean$mean_max_air) &
+                                                    !is.na(BHI_IncDur_Clean$total_precip) & 
+                                                    !is.na(BHI_IncDur_Clean$year) &
+                                                    !is.na(BHI_IncDur_Clean$day_laid) &
+                                                    !is.na(BHI_IncDur_Clean$beach_distance_m) & 
+                                                    !is.na(BHI_IncDur_Clean$dist_dune) & 
+                                                    !is.na(BHI_IncDur_Clean$dem_avg) &
+                                                    !is.na(BHI_IncDur_Clean$clutch_size) &
+                                                    !is.na(BHI_IncDur_Clean$turtle_id)),] # 568 observations
+
+
+cor(BHI_Undist_IncDur_Full[,c("mean_max_air", "mean_avg_air", "total_precip")])
+
+paste0("Model with Mean Air Temp, AICc: ", AIC(mgcv::gam(incubation_duration ~ s(mean_avg_air) + s(total_precip) + s(year) + s(day_laid) + s(beach_distance_m) + 
+                                                  s(dist_dune) + s(dem_avg) + s(clutch_size) + factor(turtle_id),
+                                           data = BHI_IncDur_Clean, family = "gaussian", na.action = "na.omit")))
+
+paste0("Model with Maximum Air Temp, AICc: ", AIC(mgcv::gam(incubation_duration ~ s(mean_max_air) + s(total_precip) + s(year) + s(day_laid) + s(beach_distance_m) + 
+                                                  s(dist_dune) + s(dem_avg) + s(clutch_size) + factor(turtle_id),
+                                           data = BHI_IncDur_Clean, family = "gaussian", na.action = "na.omit")))
+
+```
+  
+```{r IncDur_BHI_modelFit_subset, message = FALSE, warning = FALSE}
+
+m_BHI_IncDurxFull_undist <- mgcv::gam(incubation_duration ~ s(mean_avg_air) + s(total_precip) + s(year) + s(day_laid) + s(beach_distance_m) + 
+                                                  s(dist_dune) + s(dem_avg) + s(clutch_size) + factor(turtle_id),
+                                           data = BHI_Undist_IncDur_Full, 
+                                           family = "gaussian", na.action = "na.fail")
+
+subset(MuMIn::dredge(m_BHI_IncDurxFull_undist, rank = "AICc"), delta < 10)
+
+```
+  
+*Potential issue with low sample size in 2002 (n = 4), 2006 (n = 5), 2007 (n = 9), and 2009 (n = 5)*  
+  
+```{r IncDur_BHI_modelFinal, fig.width = 8, fig.height = 4, warning = FALSE, message = FALSE}
+
+BHI_Undist_IncDur_Final <- BHI_IncDur_Clean[which(!is.na(BHI_IncDur_Clean$mean_avg_air) &
+                                                     !is.na(BHI_IncDur_Clean$total_precip) &
+                                                      !is.na(BHI_IncDur_Clean$year) &
+                                                      !is.na(BHI_IncDur_Clean$day_laid) &
+                                                      !is.na(BHI_IncDur_Clean$beach_distance_m) &
+                                                      !is.na(BHI_IncDur_Clean$dem_avg) &
+                                                      !is.na(BHI_IncDur_Clean$clutch_size)),] # 570 observations
+
+m_BHI_IncDurxFinal_undist <- mgcv::gam(incubation_duration ~ s(mean_avg_air) + s(total_precip) + s(year) + s(day_laid) + s(beach_distance_m) +
+                                                  + s(dem_avg) + s(clutch_size),
+                                           data = BHI_Undist_IncDur_Final, 
+                                           family = "gaussian", na.action = "na.fail")
+
+#subset(MuMIn::dredge(m_BHI_IncDurxFinal_undist, rank = "AICc"), delta < 2)
+
+invisible(DHARMa::simulateResiduals(m_BHI_IncDurxFinal_undist, n = 5000, plot = TRUE))
+
+summary(m_BHI_IncDurxFinal_undist)
+
+knitr::kable(table(BHI_Undist_IncDur_Final$year), caption = "Number of nests included in the above model per year")
+
+```
+
+  
+```{r BHI_Undist_IncDur_trends, fig.width = 12, fig.height = 16, warning = FALSE, message = FALSE}
+
+newAvgAir <- seq(from = 25.1, to = 29.3, by = 0.1) # mean = 27.4
+newTotalPrecip <- seq(from = 6, to = 413, by = 1) # median = 192
+newDay <- seq(from = 132, to = 222, by = 1) # mean = 176
+newYear <- seq(from = 2002, to = 2023, by = 1)
+newBeachDist <- seq(from = 2100, to = 9000, by = 10) # median = 6960
+newDEM <- seq(from = -0.2, to = 5.1, by = 0.1) # median = 2.3
+newClutch <- seq(from = 58, to = 176, by = 1) # mean = 114
+
+# Predict Air Temperature effect
+m_BHI_IncDurxFinal_predictAir <- predict.gam(m_BHI_IncDurxFinal_undist, 
+                  newdata = list(mean_avg_air = newAvgAir, total_precip = rep(192, length(newAvgAir)),
+                                 year = rep(2023, length(newAvgAir)), day_laid = rep(176, length(newAvgAir)), 
+                                 beach_distance_m = rep(6960, length(newAvgAir)), dem_avg = rep(2.3, length(newAvgAir)), 
+                                 clutch_size = rep(114, length(newAvgAir))), 
+                  se.fit = TRUE)
+m_BHI_IncDurxFinal_predictAir_upper <- m_BHI_IncDurxFinal_predictAir$fit + (1.96 * m_BHI_IncDurxFinal_predictAir$se.fit)
+m_BHI_IncDurxFinal_predictAir_lower <- m_BHI_IncDurxFinal_predictAir$fit - (1.96 * m_BHI_IncDurxFinal_predictAir$se.fit)
+
+# Predict Precipitation effect
+m_BHI_IncDurxFinal_predictPrecip <- predict.gam(m_BHI_IncDurxFinal_undist, 
+                  newdata = list(mean_avg_air = rep(27.4, length(newTotalPrecip)), total_precip = newTotalPrecip,
+                                 year = rep(2023, length(newTotalPrecip)), day_laid = rep(176, length(newTotalPrecip)), 
+                                 beach_distance_m = rep(6960, length(newTotalPrecip)), dem_avg = rep(2.3, length(newTotalPrecip)), 
+                                 clutch_size = rep(114, length(newTotalPrecip))), 
+                  se.fit = TRUE)
+m_BHI_IncDurxFinal_predictPrecip_upper <- m_BHI_IncDurxFinal_predictPrecip$fit + (1.96 * m_BHI_IncDurxFinal_predictPrecip$se.fit)
+m_BHI_IncDurxFinal_predictPrecip_lower <- m_BHI_IncDurxFinal_predictPrecip$fit - (1.96 * m_BHI_IncDurxFinal_predictPrecip$se.fit)
+
+# Predict Day Laid effect
+m_BHI_IncDurxFinal_predictDay <- predict.gam(m_BHI_IncDurxFinal_undist, 
+                  newdata = list(mean_avg_air = rep(27.4, length(newDay)), total_precip = rep(192, length(newDay)),
+                                 year = rep(2023, length(newDay)), day_laid = newDay, 
+                                 beach_distance_m = rep(6960, length(newDay)), dem_avg = rep(2.3, length(newDay)), 
+                                 clutch_size = rep(114, length(newDay))), 
+                  se.fit = TRUE)
+m_BHI_IncDurxFinal_predictDay_upper <- m_BHI_IncDurxFinal_predictDay$fit + (1.96 * m_BHI_IncDurxFinal_predictDay$se.fit)
+m_BHI_IncDurxFinal_predictDay_lower <- m_BHI_IncDurxFinal_predictDay$fit - (1.96 * m_BHI_IncDurxFinal_predictDay$se.fit)
+
+# Predict Year effect
+m_BHI_IncDurxFinal_predictYear <- predict.gam(m_BHI_IncDurxFinal_undist, 
+                  newdata = list(mean_avg_air = rep(27.4, length(newYear)), total_precip = rep(192, length(newYear)),
+                                 year = newYear, day_laid = rep(176, length(newYear)), 
+                                 beach_distance_m = rep(6960, length(newYear)), dem_avg = rep(2.3, length(newYear)), 
+                                 clutch_size = rep(114, length(newYear))), 
+                  se.fit = TRUE)
+m_BHI_IncDurxFinal_predictYear_upper <- m_BHI_IncDurxFinal_predictYear$fit + (1.96 * m_BHI_IncDurxFinal_predictYear$se.fit)
+m_BHI_IncDurxFinal_predictYear_lower <- m_BHI_IncDurxFinal_predictYear$fit - (1.96 * m_BHI_IncDurxFinal_predictYear$se.fit)
+
+# Predict Beach Distance effect
+m_BHI_IncDurxFinal_predictBeach <- predict.gam(m_BHI_IncDurxFinal_undist, 
+                  newdata = list(mean_avg_air = rep(27.4, length(newBeachDist)), total_precip = rep(192, length(newBeachDist)),
+                                 year = rep(2023, length(newBeachDist)), day_laid = rep(176, length(newBeachDist)), 
+                                 beach_distance_m = newBeachDist, dem_avg = rep(2.3, length(newBeachDist)), 
+                                 clutch_size = rep(114, length(newBeachDist))), 
+                  se.fit = TRUE)
+m_BHI_IncDurxFinal_predictBeach_upper <- m_BHI_IncDurxFinal_predictBeach$fit + (1.96 * m_BHI_IncDurxFinal_predictBeach$se.fit)
+m_BHI_IncDurxFinal_predictBeach_lower <- m_BHI_IncDurxFinal_predictBeach$fit - (1.96 * m_BHI_IncDurxFinal_predictBeach$se.fit)
+
+# Predict Elevation effect
+m_BHI_IncDurxFinal_predictElev <- predict.gam(m_BHI_IncDurxFinal_undist, 
+                  newdata = list(mean_avg_air = rep(27.4, length(newDEM)), total_precip = rep(192, length(newDEM)),
+                                 year = rep(2023, length(newDEM)), day_laid = rep(176, length(newDEM)), 
+                                 beach_distance_m = rep(6960, length(newDEM)), dem_avg = newDEM, 
+                                 clutch_size = rep(114, length(newDEM))), 
+                  se.fit = TRUE)
+m_BHI_IncDurxFinal_predictElev_upper <- m_BHI_IncDurxFinal_predictElev$fit + (1.96 * m_BHI_IncDurxFinal_predictElev$se.fit)
+m_BHI_IncDurxFinal_predictElev_lower <- m_BHI_IncDurxFinal_predictElev$fit - (1.96 * m_BHI_IncDurxFinal_predictElev$se.fit)
+
+# Predict Clutch Size effect
+m_BHI_IncDurxFinal_predictClutch <- predict.gam(m_BHI_IncDurxFinal_undist, 
+                  newdata = list(mean_avg_air = rep(27.4, length(newClutch)), total_precip = rep(192, length(newClutch)),
+                                 year = rep(2023, length(newClutch)), day_laid = rep(176, length(newClutch)), 
+                                 beach_distance_m = rep(6960, length(newClutch)), dem_avg = rep(2.3, length(newClutch)), 
+                                 clutch_size = newClutch), 
+                  se.fit = TRUE)
+m_BHI_IncDurxFinal_predictClutch_upper <- m_BHI_IncDurxFinal_predictClutch$fit + (1.96 * m_BHI_IncDurxFinal_predictClutch$se.fit)
+m_BHI_IncDurxFinal_predictClutch_lower <- m_BHI_IncDurxFinal_predictClutch$fit - (1.96 * m_BHI_IncDurxFinal_predictClutch$se.fit)
+
+#-------------
+
+par(mfrow = c(4, 2), family = "serif", mar = c(4.5, 5.0, 3, 0.5), bty = "n", las = 1, cex.axis = 1.2, cex.lab = 1.3, cex.main = 1.3)
+
+# Year Laid
+plot(jitter(BHI_Undist_IncDur_Final$year, 1), BHI_Undist_IncDur_Final$incubation_duration, 
+     pch = 16, col = rgb(125, 125, 125, alpha = 80, maxColorValue = 255),
+     xlim = c(2002, 2023), xlab = "Year Laid", ylab = "Incubation Duration (days)", main = "")
+lines(newYear, m_BHI_IncDurxFinal_predictYear$fit, lty = 1, lwd = 2, col = "blue")
+lines(newYear, m_BHI_IncDurxFinal_predictYear_upper, lty = 2, lwd = 1, col = "blue")
+lines(newYear, m_BHI_IncDurxFinal_predictYear_lower, lty = 2, lwd = 1, col = "blue")
+mtext("A. Year Laid", side = 3, line = 1, adj = 0, outer = FALSE, cex = 1.2)
+
+# Day Laid
+plot(BHI_Undist_IncDur_Final$day_laid, BHI_Undist_IncDur_Final$incubation_duration, 
+     pch = 16, col = rgb(125, 125, 125, alpha = 80, maxColorValue = 255),
+     xlim = c(130, 230), xlab = "Day Laid", ylab = "Incubation Duration (days)", main = "")
+lines(newDay, m_BHI_IncDurxFinal_predictDay$fit, lty = 1, lwd = 2, col = "blue")
+lines(newDay, m_BHI_IncDurxFinal_predictDay_upper, lty = 2, lwd = 1, col = "blue")
+lines(newDay, m_BHI_IncDurxFinal_predictDay_lower, lty = 2, lwd = 1, col = "blue")
+mtext("B. Day Laid", side = 3, line = 1, adj = 0, outer = FALSE, cex = 1.2)
+
+# Air Temperature
+plot(BHI_Undist_IncDur_Final$mean_avg_air, BHI_Undist_IncDur_Final$incubation_duration, 
+     pch = 16, col = rgb(125, 125, 125, alpha = 80, maxColorValue = 255),
+     xlim = c(25, 30), xlab = "Average Daily Mean Temperature (\u00b0C)", ylab = "Incubation Duration (days)", main = "")
+lines(newAvgAir, m_BHI_IncDurxFinal_predictAir$fit, lty = 1, lwd = 2, col = "blue")
+lines(newAvgAir, m_BHI_IncDurxFinal_predictAir_upper, lty = 2, lwd = 1, col = "blue")
+lines(newAvgAir, m_BHI_IncDurxFinal_predictAir_lower, lty = 2, lwd = 1, col = "blue")
+mtext("C. Air Temperature", side = 3, line = 1, adj = 0, outer = FALSE, cex = 1.2)
+
+# Rainfall
+plot(BHI_Undist_IncDur_Final$total_precip, BHI_Undist_IncDur_Final$incubation_duration, 
+     pch = 16, col = rgb(125, 125, 125, alpha = 80, maxColorValue = 255),
+     xlim = c(0, 425), xlab = "Average Total Rainfall (mm)", ylab = "Incubation Duration (days)", main = "")
+lines(newTotalPrecip, m_BHI_IncDurxFinal_predictPrecip$fit, lty = 1, lwd = 2, col = "blue")
+lines(newTotalPrecip, m_BHI_IncDurxFinal_predictPrecip_upper, lty = 2, lwd = 1, col = "blue")
+lines(newTotalPrecip, m_BHI_IncDurxFinal_predictPrecip_lower, lty = 2, lwd = 1, col = "blue")
+mtext("D. Rainfall", side = 3, line = 1, adj = 0, outer = FALSE, cex = 1.2)
+
+# Beach Distance
+plot(BHI_Undist_IncDur_Final$beach_distance_m, BHI_Undist_IncDur_Final$incubation_duration, 
+     pch = 16, col = rgb(125, 125, 125, alpha = 80, maxColorValue = 255),
+     xlim = c(2000, 9000), xlab = "Distance from Ferry Port (m)", ylab = "Incubation Duration (days)", main = "")
+lines(newBeachDist, m_BHI_IncDurxFinal_predictBeach$fit, lty = 1, lwd = 2, col = "blue")
+lines(newBeachDist, m_BHI_IncDurxFinal_predictBeach_upper, lty = 2, lwd = 1, col = "blue")
+lines(newBeachDist, m_BHI_IncDurxFinal_predictBeach_lower, lty = 2, lwd = 1, col = "blue")
+mtext("E. Alongshore Distance", side = 3, line = 1, adj = 0, outer = FALSE, cex = 1.2)
+
+# Elevation
+plot(BHI_Undist_IncDur_Final$dem_avg, BHI_Undist_IncDur_Final$incubation_duration, 
+     pch = 16, col = rgb(125, 125, 125, alpha = 80, maxColorValue = 255),
+     xlim = c(-0.5, 5), xlab = "Average Elevation (m NAVD88)", ylab = "Incubation Duration (days)", main = "")
+lines(newDEM, m_BHI_IncDurxFinal_predictElev$fit, lty = 1, lwd = 2, col = "blue")
+lines(newDEM, m_BHI_IncDurxFinal_predictElev_upper, lty = 2, lwd = 1, col = "blue")
+lines(newDEM, m_BHI_IncDurxFinal_predictElev_lower, lty = 2, lwd = 1, col = "blue")
+mtext("F. Elevation", side = 3, line = 1, adj = 0, outer = FALSE, cex = 1.2)
+
+# Clutch Size
+plot(BHI_Undist_IncDur_Final$clutch_size, BHI_Undist_IncDur_Final$incubation_duration, 
+     pch = 16, col = rgb(125, 125, 125, alpha = 80, maxColorValue = 255),
+     xlim = c(50, 200), xlab = "Clutch Size", ylab = "Incubation Duration (days)", main = "")
+lines(newClutch, m_BHI_IncDurxFinal_predictClutch$fit, lty = 1, lwd = 2, col = "blue")
+lines(newClutch, m_BHI_IncDurxFinal_predictClutch_upper, lty = 2, lwd = 1, col = "blue")
+lines(newClutch, m_BHI_IncDurxFinal_predictClutch_lower, lty = 2, lwd = 1, col = "blue")
+mtext("G. Clutch Size", side = 3, line = 1, adj = 0, outer = FALSE, cex = 1.2)
+
+```
+  
+When scaled in a linear model for a more simple effect size comparison, average air temperature (-1.38) and precipitation (1.29) have comparable effect sizes but air temperature's effect is stronger. Approximately 119mm of rainfall is needed to counteract 1$^\circ C$ of warming average air temperatures. Day Laid has a comparable effect size as air temperature and precipitation (-1.61) Alongshore distance has a relatively strong effect (1.12), and elevation (-0.46) and clutch size (-0.21) have small effects on incubation duration.  
+  
+```{r BHI_Undist_IncDur_metDuring_effectSizes}
+
+round(summary(lm(incubation_duration ~ mean_avg_air + total_precip + year + day_laid + beach_distance_m + dem_avg + clutch_size,
+        data = BHI_Undist_IncDur_Final))$coef, 3)
+
+round(confint(lm(incubation_duration ~ mean_avg_air + total_precip + year + day_laid + beach_distance_m + dem_avg + clutch_size,
+        data = BHI_Undist_IncDur_Final)), 3)
+
+round(summary(lm(incubation_duration ~ scale(mean_avg_air) + scale(total_precip) + scale(year) + scale(day_laid) + scale(beach_distance_m) + scale(dem_avg) +  
+             scale(clutch_size),
+        data = BHI_Undist_IncDur_Final))$coef, 3)
+
+round(confint(lm(incubation_duration ~ scale(mean_avg_air) + scale(total_precip) + scale(year) + scale(day_laid) + scale(beach_distance_m) + scale(dem_avg) +  
+             scale(clutch_size),
+        data = BHI_Undist_IncDur_Final)), 3)
+
+
+paste0("It takes ", round(attr(scale(BHI_Undist_IncDur_Final$total_precip), 'scaled:scale')/
+        attr(scale(BHI_Undist_IncDur_Final$mean_avg_air), 'scaled:scale'), 1)," mm of total precipitation, ", 
+       round(attr(scale(BHI_Undist_IncDur_Final$beach_distance_m), 'scaled:scale')/
+        attr(scale(BHI_Undist_IncDur_Final$mean_avg_air), 'scaled:scale'), 1),
+       " m of alongshore movement, or a ", 
+       round(attr(scale(BHI_Undist_IncDur_Final$day_laid), 'scaled:scale')/
+        attr(scale(BHI_Undist_IncDur_Final$mean_avg_air), 'scaled:scale'), 1),
+       "-day shift\nearlier in the season to counteract 1\u00b0C of increased average air temperature.")
+
+```
+  
+## Day Laid Exploration  
+  
+The mean deposition date of undisturbed nests has trended 0.17 days yr^-1^ earlier since 2002. This trend suggests a lengthening of up to 0.4 days in incubation duration on Bald Head Island since 2003-2007.  
+  
+```{r incdur_daylaid_year, fig.width = 6, fig.height = 4}
+
+m_bhi_day_year_predict <- predict.gam(gam(day_laid ~ s(year), data = BHI_IncDur_Clean, family = "gaussian"),
+                                         newdata = list(year = 1991:2023),
+                                         se.fit = TRUE)
+
+
+par(mfrow = c(1, 1), family = "serif", mar = c(4.5, 5.0, 3.0, 0.5), bty = "n", las = 1, cex.axis = 1.1, cex.lab = 1.2, cex.main = 1.3)
+
+plot(jitter(BHI_IncDur_Clean$year, 1), BHI_IncDur_Clean$day_laid, 
+     pch = 16, col = rgb(125, 125, 125, alpha = 60, maxColorValue = 255), 
+     main = "", xlab = "Year", xlim = c(1991, 2025), ylab = "Day Laid", ylim = c(130, 225))
+lines(1991:2023, m_bhi_day_year_predict$fit, lty = 1, lwd = 2, col = "blue")
+lines(1991:2023, m_bhi_day_year_predict$fit + (1.96 * m_bhi_day_year_predict$se.fit), lty = 2, lwd = 1, col = "blue")
+lines(1991:2023, m_bhi_day_year_predict$fit - (1.96 * m_bhi_day_year_predict$se.fit), lty = 2, lwd = 1, col = "blue")
+
+summary(lm(day_laid ~ year, data = BHI_IncDur_Clean))
+
+#--------------
+
+paste0("Mean day laid 2003-2007: ", 
+       round(mean(BHI_Undist_IncDur_Final[which(BHI_Undist_IncDur_Final$year >= 2003 & BHI_Undist_IncDur_Final$year <= 2007),]$day_laid), 1),
+       ", Projected incubation duration: ",
+       round(predict.gam(m_BHI_IncDurxFinal_undist,
+            newdata = list(mean_avg_air = 27.4, total_precip = 192, year = 2023, 
+                           day_laid = mean(BHI_Undist_IncDur_Final[which(BHI_Undist_IncDur_Final$year >= 2003 &
+                                                                                   BHI_Undist_IncDur_Final$year <= 2007),]$day_laid), 
+                           beach_distance_m = 6960, dem_avg = 2.3, clutch_size = 114),
+            se.fit = FALSE), 1),
+       " days")
+paste0("Mean day laid 2019-2023: ", 
+       round(mean(BHI_Undist_IncDur_Final[which(BHI_Undist_IncDur_Final$year >= 2019 & BHI_Undist_IncDur_Final$year <= 2023),]$day_laid), 1),
+       ", Projected incubation duration: ",
+       round(predict.gam(m_BHI_IncDurxFinal_undist,
+            newdata = list(mean_avg_air = 27.4, total_precip = 192, year = 2023, 
+                           day_laid = mean(BHI_Undist_IncDur_Final[which(BHI_Undist_IncDur_Final$year >= 2019 &
+                                                                                   BHI_Undist_IncDur_Final$year <= 2023),]$day_laid), 
+                           beach_distance_m = 6960, dem_avg = 2.3, clutch_size = 114),
+            se.fit = FALSE), 1),
+       " days") 
+
+```
+  
+### Date of First/Last Nesting and Season Length  
+  
+The dates of the first and last nests laid were extracted for each year to investigate potential changes through time. The length of nesting season was calculated as the number of days between the first and last nest laid each year per island.  
+  
+```{r firstCrawls_Nest_createTable}
+
+firstCrawls <- BHI_Cc_Nests %>%
+  group_by(year) %>%
+  summarise("first_nest" = min(date_laid, na.rm = TRUE), "min_day" = min(day_laid, na.rm = TRUE), "min_week" = min(week_laid, na.rm = TRUE),
+            "last_nest" = max(date_laid, na.rm = TRUE), "max_day" = max(day_laid, na.rm = TRUE), "max_week" = max(week_laid, na.rm = TRUE))
+firstCrawls$nest_length <- firstCrawls$max_day - firstCrawls$min_day
+
+colnames(firstCrawls) <- c("year", "first_nest", "min_day", "min_week", "last_nest", "max_day", "max_week", "nest_length")
+
+#-----------
+
+#min(BHI_Cc_Nests$day_laid, na.rm = TRUE); BHI_Cc_Nests[which(BHI_Cc_Nests$day_laid == min(BHI_Cc_Nests$day_laid, na.rm = TRUE)),]$date_laid
+#max(BHI_Cc_Nests$day_laid, na.rm = TRUE); BHI_Cc_Nests[which(BHI_Cc_Nests$day_laid == max(BHI_Cc_Nests$day_laid, na.rm = TRUE)),]$date_laid
+
+```
+  
+The earliest nest occurring in the Bald Head dataset was 3 May 2002 (day 123), whereas the latest was 9 September 2008 (day 253). In 2023, the season started on 16 May (day 136).  
+  
+```{r firstCrawls_Nest_BHITable}
+
+knitr::kable(firstCrawls, caption = "Dates of first and last nests laid each year and corresponding nesting season length for Bald Head Island")
+
+```
+  
+```{r firstCrawls_Nest_plot, fig.width = 6, fig.height = 12, message = FALSE, warning = FALSE}
+
+yearsObs <- seq(from = 1991, to = 2023, by = 1) 
+
+m_firstNests <- mgcv::gam(min_day ~ s(year), family = "gaussian", data = firstCrawls)
+m_firstNests_predict <- mgcv::predict.gam(m_firstNests, newdata = list(year = yearsObs), se.fit = FALSE)
+
+m_lastNests <- mgcv::gam(max_day ~ s(year), family = "gaussian", data = firstCrawls)
+m_lastNests_predict <- mgcv::predict.gam(m_lastNests, newdata = list(year = yearsObs), se.fit = FALSE)
+
+m_lengthNests <- mgcv::gam(nest_length ~ s(year), family = "gaussian", data = firstCrawls)
+m_lengthNests_predict <- mgcv::predict.gam(m_lengthNests, newdata = list(year = yearsObs), se.fit = FALSE)
+
+#---------------------
+
+par(mfrow = c(3,1), family = "serif", mar = c(4.5, 5.0, 3.0, 0.5), bty = "n", las = 1, cex.axis = 1.1, cex.lab = 1.3, cex.main = 1.3)
+
+plot(firstCrawls$year, firstCrawls$min_day, pch = 16, col = rgb(125, 125, 125, alpha = 80, maxColorValue = 255), 
+     main = "", xlim = c(1990, 2025), xlab = "Year", 
+     ylim = c(120, 160), ylab = "Day of First Nest")
+lines(yearsObs, m_firstNests_predict, lty = 1, lwd = 2, col = "blue")
+mtext("A.", side = 3, line = 1, adj = 0, outer = FALSE, cex = 1.2)
+
+plot(firstCrawls$year, firstCrawls$max_day, pch = 16, col = rgb(125, 125, 125, alpha = 80, maxColorValue = 255), 
+     main = "", xlim = c(1990, 2025), xlab = "Year", 
+     ylim = c(200, 260), ylab = "Day of Last Nest")
+lines(yearsObs, m_lastNests_predict, lty = 1, lwd = 2, col = "blue")
+mtext("B.", side = 3, line = 1, adj = 0, outer = FALSE, cex = 1.2)
+
+plot(firstCrawls$year, firstCrawls$nest_length, pch = 16, col = rgb(125, 125, 125, alpha = 80, maxColorValue = 255), 
+     main = "", xlim = c(1990, 2025), xlab = "Year", 
+     ylim = c(60, 120), ylab = "Nesting Season Length (days)")
+lines(yearsObs, m_lengthNests_predict, lty = 1, lwd = 2, col = "blue")
+mtext("C.", side = 3, line = 1, adj = 0, outer = FALSE, cex = 1.2)
+
+
+```
+  
+There is no statistically significant trend in the dates of first nest deposition, last nest deposition, or nesting season length. This is consistent with the results of Reneker and Kamel (2016a) for Bald Head Island. The addition of 2016-2023 data to their previous 1991-2015 data does not alter their observed pattern.  
+  
+```{r firstCrawls_Nest_BHIstats}
+
+summary(gam(min_day ~ s(year), data = firstCrawls))
+
+summary(gam(max_day ~ s(year), data = firstCrawls))
+
+summary(gam(nest_length ~ s(year), data = firstCrawls))
+
+```
+  
+**The start, end, and length of the nesting season have not changed, but turtles are nesting more frequently earlier in the season.**  
+  
+## Beach Distance Exploration  
+  
+Since 2002, there has been an average shift of 47.4 m yr^-1^ away from the Cape Fear River. Since 2003-2007, undisturbed nests have shifted just over 1 km away from the river. This translates up to a 0.6-day extension in projected incubation duration.  
+  
+```{r incdur_distance_year, fig.width = 6, fig.height = 4}
+
+m_bhi_beachdist_year_predict <- predict.gam(gam(beach_distance_m ~ s(year), data = BHI_IncDur_Clean, family = "gaussian"),
+                                         newdata = list(year = 1998:2023),
+                                         se.fit = TRUE)
+
+
+par(mfrow = c(1, 1), family = "serif", mar = c(4.5, 5.0, 3.0, 0.5), bty = "n", las = 1, cex.axis = 1.1, cex.lab = 1.2, cex.main = 1.3)
+
+plot(BHI_IncDur_Clean$year, BHI_IncDur_Clean$beach_distance_m / 1000, 
+     pch = 16, col = rgb(125, 125, 125, alpha = 60, maxColorValue = 255), 
+     main = "", xlab = "Year", xlim = c(1998, 2025), ylab = "Distance from Ferry (km)", ylim = c(0, 10))
+lines(1998:2023, m_bhi_beachdist_year_predict$fit / 1000, lty = 1, lwd = 2, col = "blue")
+lines(1998:2023, (m_bhi_beachdist_year_predict$fit + (1.96 * m_bhi_beachdist_year_predict$se.fit)) / 1000, lty = 2, lwd = 1, col = "blue")
+lines(1998:2023, (m_bhi_beachdist_year_predict$fit - (1.96 * m_bhi_beachdist_year_predict$se.fit)) / 1000, lty = 2, lwd = 1, col = "blue")
+
+summary(lm(beach_distance_m ~ year, data = BHI_IncDur_Clean))
+
+#--------------
+
+paste0("Mean alongshore distance 2003-2007: ", 
+       round(mean(BHI_Undist_IncDur_Final[which(BHI_Undist_IncDur_Final$year >= 2003 & BHI_Undist_IncDur_Final$year <= 2007),]$beach_distance_m), 0),
+       " m, Projected incubation duration: ",
+       round(predict.gam(m_BHI_IncDurxFinal_undist,
+            newdata = list(mean_avg_air = 27.4, total_precip = 192, year = 2023, day_laid = 176, 
+                           beach_distance_m = mean(BHI_Undist_IncDur_Final[which(BHI_Undist_IncDur_Final$year >= 2003 &
+                                                                                   BHI_Undist_IncDur_Final$year <= 2007),]$beach_distance_m), 
+                           dem_avg = 2.3, clutch_size = 114),
+            se.fit = FALSE), 1),
+       " days")
+paste0("Mean alongshore distance 2019-2023: ", 
+       round(mean(BHI_Undist_IncDur_Final[which(BHI_Undist_IncDur_Final$year >= 2019 & BHI_Undist_IncDur_Final$year <= 2023),]$beach_distance_m), 0),
+       " m, Projected incubation duration: ",
+       round(predict.gam(m_BHI_IncDurxFinal_undist,
+            newdata = list(mean_avg_air = 27.4, total_precip = 192, year = 2023, day_laid = 176, 
+                           beach_distance_m = mean(BHI_Undist_IncDur_Final[which(BHI_Undist_IncDur_Final$year >= 2019 &
+                                                                                   BHI_Undist_IncDur_Final$year <= 2023),]$beach_distance_m), 
+                           dem_avg = 2.3, clutch_size = 114),
+            se.fit = FALSE), 1),
+       " days")
+
+```
+  
+## Elevation Exploration  
+  
+Nest elevation, based on the time-averaged DEM from 1998 - 2020, shows no long-term trend. Changes in elevation through time are unlikely to explain any part of the recent lengthening of incubation durations on Bald Head Island.  
+  
+```{r incdur_elevation_year, fig.width = 6, fig.height = 4}
+
+m_bhi_elev_year_predict <- predict.gam(gam(dem_avg ~ s(year), data = BHI_IncDur_Clean, family = "gaussian"),
+                                         newdata = list(year = 1998:2023),
+                                         se.fit = TRUE)
+
+
+par(mfrow = c(1, 1), family = "serif", mar = c(4.5, 5.0, 3.0, 0.5), bty = "n", las = 1, cex.axis = 1.1, cex.lab = 1.2, cex.main = 1.3)
+
+plot(jitter(BHI_IncDur_Clean$year, 1), BHI_IncDur_Clean$dem_avg, 
+     pch = 16, col = rgb(125, 125, 125, alpha = 60, maxColorValue = 255), 
+     main = "", xlab = "Year", xlim = c(1998, 2025), ylab = "Average Elevation (m NAVD88)", ylim = c(-0.5, 5))
+lines(1998:2023, m_bhi_elev_year_predict$fit, lty = 1, lwd = 2, col = "blue")
+lines(1998:2023, m_bhi_elev_year_predict$fit + (1.96 * m_bhi_elev_year_predict$se.fit), lty = 2, lwd = 1, col = "blue")
+lines(1998:2023, m_bhi_elev_year_predict$fit - (1.96 * m_bhi_elev_year_predict$se.fit), lty = 2, lwd = 1, col = "blue")
+
+summary(lm(dem_avg ~ year, data = BHI_IncDur_Clean))
+
+#--------------
+
+paste0("Mean elevation 2003-2007: ", 
+       round(mean(BHI_Undist_IncDur_Final[which(BHI_Undist_IncDur_Final$year >= 2003 & BHI_Undist_IncDur_Final$year <= 2007),]$dem_avg), 2),
+       " m NAVD88, Projected incubation duration: ",
+       round(predict.gam(m_BHI_IncDurxFinal_undist,
+            newdata = list(mean_avg_air = 27.4, total_precip = 192, year = 2023, day_laid = 176, 
+                           beach_distance_m = 6960, 
+                           dem_avg = mean(BHI_Undist_IncDur_Final[which(BHI_Undist_IncDur_Final$year >= 2003 &
+                                                                                   BHI_Undist_IncDur_Final$year <= 2007),]$dem_avg), 
+                           clutch_size = 114),
+            se.fit = FALSE), 1),
+       " days")
+paste0("Mean elevation 2019-2023: ", 
+       round(mean(BHI_Undist_IncDur_Final[which(BHI_Undist_IncDur_Final$year >= 2019 & BHI_Undist_IncDur_Final$year <= 2023),]$dem_avg), 2),
+       " m NAVD88, Projected incubation duration: ",
+       round(predict.gam(m_BHI_IncDurxFinal_undist,
+            newdata = list(mean_avg_air = 27.4, total_precip = 192, year = 2023, day_laid = 176, 
+                           beach_distance_m = 6960, 
+                           dem_avg = mean(BHI_Undist_IncDur_Final[which(BHI_Undist_IncDur_Final$year >= 2019 &
+                                                                                   BHI_Undist_IncDur_Final$year <= 2023),]$dem_avg), 
+                           clutch_size = 114),
+            se.fit = FALSE), 1),
+       " days")
+
+```
+  
+  
+## Clutch Size Exploration  
+  
+Clutch sizes from undisturbed nests show no long-term trend. Changes in clutch size through time are unlikely to explain any part of the recent lengthening of incubation durations on Bald Head Island.  
+  
+```{r incdur_clutchsize_year, fig.width = 6, fig.height = 4}
+
+m_bhi_clutch_year_predict <- predict.gam(gam(clutch_size ~ s(year), data = BHI_IncDur_Clean, family = "gaussian"),
+                                         newdata = list(year = 1991:2023),
+                                         se.fit = TRUE)
+
+
+par(mfrow = c(1, 1), family = "serif", mar = c(4.5, 5.0, 3.0, 0.5), bty = "n", las = 1, cex.axis = 1.1, cex.lab = 1.2, cex.main = 1.3)
+
+plot(jitter(BHI_IncDur_Clean$year, 1), BHI_IncDur_Clean$clutch_size, 
+     pch = 16, col = rgb(125, 125, 125, alpha = 60, maxColorValue = 255), 
+     main = "", xlab = "Year", xlim = c(1991, 2025), ylab = "Clutch Size", ylim = c(60, 175))
+lines(1991:2023, m_bhi_clutch_year_predict$fit, lty = 1, lwd = 2, col = "blue")
+lines(1991:2023, m_bhi_clutch_year_predict$fit + (1.96 * m_bhi_clutch_year_predict$se.fit), lty = 2, lwd = 1, col = "blue")
+lines(1991:2023, m_bhi_clutch_year_predict$fit - (1.96 * m_bhi_clutch_year_predict$se.fit), lty = 2, lwd = 1, col = "blue")
+
+summary(lm(clutch_size ~ year, data = BHI_Undist_IncDur_Final))
+
+#--------------
+
+paste0("Mean clutch size 2003-2007: ", 
+       round(mean(BHI_Undist_IncDur_Final[which(BHI_Undist_IncDur_Final$year >= 2003 & BHI_Undist_IncDur_Final$year <= 2007),]$clutch_size), 1),
+       " eggs, Projected incubation duration: ",
+       round(predict.gam(m_BHI_IncDurxFinal_undist,
+            newdata = list(mean_avg_air = 27.4, total_precip = 192, year = 2023, day_laid = 176, 
+                           beach_distance_m = 6960, dem_avg = 2.3, 
+                           clutch_size = mean(BHI_Undist_IncDur_Final[which(BHI_Undist_IncDur_Final$year >= 2003 &
+                                                                                   BHI_Undist_IncDur_Final$year <= 2007),]$clutch_size)),
+            se.fit = FALSE), 1),
+       " days")
+paste0("Mean clutch size 2019-2023: ", 
+       round(mean(BHI_Undist_IncDur_Final[which(BHI_Undist_IncDur_Final$year >= 2019 & BHI_Undist_IncDur_Final$year <= 2023),]$clutch_size), 1),
+       " eggs, Projected incubation duration: ",
+       round(predict.gam(m_BHI_IncDurxFinal_undist,
+            newdata = list(mean_avg_air = 27.4, total_precip = 192, year = 2023, day_laid = 176, 
+                           beach_distance_m = 6960, dem_avg = 2.3, 
+                           clutch_size = mean(BHI_Undist_IncDur_Final[which(BHI_Undist_IncDur_Final$year >= 2019 &
+                                                                                   BHI_Undist_IncDur_Final$year <= 2023),]$clutch_size)),
+            se.fit = FALSE), 1),
+       " days")
+
+```
+  
+***  
+  
+# HATCHING SUCCESS  
+  
+In the presented analysis, 986 nests (41.9%) were removed from the Bald Head Island loggerhead nest dataset due to relocation, predation, invasion by sea oat roots (*Uniola paniculata*), wave wash-over, wave wash-out, or missing hatching success data. No nests were reported to be scattered by another nesting female or poached. This left 1370 nests from 1991 - 2023 available for analysis.  
+  
+Hatching success between *in situ* and relocated nests which were otherwise undisturbed were significantly different (Relocated nests HS -2.6%, p = 0.008, ES -4.4%, p < 0.001), hence the separation by relocation status mentioned above.  
+  
+```{r isolate_BHI_Undist_HsEs}
+
+betaHS <- NULL
+for(i in 1:length(BHI_Cc_Nests_Clean$hatching_prop)){
+  if(is.na(BHI_Cc_Nests_Clean$hatching_prop[i])){
+    betaHS[i] <- NA
+  } else if(BHI_Cc_Nests_Clean$hatching_prop[i] == 0){
+    betaHS[i] <- 0.0001
+  } else if(BHI_Cc_Nests_Clean$hatching_prop[i] == 1){
+    betaHS[i] <- 0.9999
+  } else {
+    betaHS[i] <- BHI_Cc_Nests_Clean$hatching_prop[i]
+  }
+}
+BHI_Cc_Nests_Clean$Hatch_Trans <- betaHS
+
+betaES <- NULL
+for(i in 1:length(BHI_Cc_Nests_Clean$emergence_prop)){
+  if(is.na(BHI_Cc_Nests_Clean$emergence_prop[i])){
+    betaES[i] <- NA
+  } else if(BHI_Cc_Nests_Clean$emergence_prop[i] == 0){
+    betaES[i] <- 0.0001
+  } else if(BHI_Cc_Nests_Clean$emergence_prop[i] == 1){
+    betaES[i] <- 0.9999
+  } else {
+    betaES[i] <- BHI_Cc_Nests_Clean$emergence_prop[i]
+  }
+}
+BHI_Cc_Nests_Clean$Emerge_Trans <- betaES
+
+#------------------
+
+BHI_Undist_HsEs <- BHI_Cc_Nests_Clean %>% 
+  filter(in_situ_relocated != "NA") %>% 
+  filter(predated != "Yes") %>%
+  filter(roots != "Yes") %>% 
+  filter(scattered_by_turtle != "Yes") %>% 
+  filter(poached != "Yes") %>% 
+  filter(washout_complete != "Yes") %>% 
+  filter(washout_partial != "Yes") %>% 
+  filter(washout_post_hatch_pre_inventory != "Yes") %>% 
+  filter(washed_over != "Yes") %>% 
+  filter(!is.na(date_laid)) %>% 
+  filter(hatching_prop > 0) %>% 
+  filter(emergence_prop > 0)
+
+summary(glmmTMB(Hatch_Trans ~ in_situ_relocated, data = BHI_Undist_HsEs, family = glmmTMB::beta_family(link = "logit"))) # test difference by relocation status
+# Significant difference in hatching success between in situ and relocated nests: Relo -2.6%, p = 0.008
+summary(emmeans(glmmTMB(Hatch_Trans ~ in_situ_relocated, data = BHI_Undist_HsEs, family = glmmTMB::beta_family(link = "logit")), 
+                specs = pairwise ~ in_situ_relocated)$emmeans, type = "response")
+summary(glmmTMB(Emerge_Trans ~ in_situ_relocated, data = BHI_Undist_HsEs, family = glmmTMB::beta_family(link = "logit"))) # test difference by relocation status
+# Significant difference in emergence success between in situ and relocated nests: Relo -4.4%, p < 0.001
+summary(emmeans(glmmTMB(Emerge_Trans ~ in_situ_relocated, data = BHI_Undist_HsEs, family = glmmTMB::beta_family(link = "logit")), 
+                specs = pairwise ~ in_situ_relocated)$emmeans, type = "response")
+
+#---------------
+
+BHI_Undist_HsEs <- BHI_Cc_Nests_Clean %>% # Start with 2356 nests in cleaned Bald Head Island loggerhead nest dataset
+  filter(in_situ_relocated != "Relocated") %>% # Removed 616 nests
+  filter(predated != "Yes") %>% # Removed an additional 76 nests
+  filter(roots != "Yes") %>% # Removed an additional 3 nests
+  filter(scattered_by_turtle != "Yes") %>% # No additional affected nests
+  filter(poached != "Yes") %>% # No additional affected nests
+  filter(washout_complete != "Yes") %>% # Removed an additional 118 nests
+  filter(washout_partial != "Yes") %>% # Removed an additional 1 nest
+  filter(washout_post_hatch_pre_inventory != "Yes") %>% # No additional affected nests
+  filter(washed_over != "Yes") %>% # Removed an additional 43 nests
+  filter(!is.na(date_laid)) %>% # No additional affected nests
+  filter(!is.na(hatching_prop)) %>% # Removed an additional 129 nests
+  filter(!is.na(emergence_prop)) # No additional affected nests
+# Removed 986 nests (41.9%), leaving 1370 (58.1%) loggerhead nests in the Bald Head Island dataset
+
+```
+  
+Overall, the current Bald Head Island dataset has a mild left skew.  
+  
+```{r bhi_Undist_HsEs_distribution, fig.width = 6, fig.height = 8}
+
+describe(BHI_Undist_HsEs$hatching_prop); describe(BHI_Undist_HsEs$emergence_prop)
+
+par(mfrow = c(2, 1), family = "serif", mar = c(4.5, 5.0, 3, 0.5), bty = "n", las = 1, cex.axis = 1.2, cex.lab = 1.3, cex.main = 1.3)
+
+plot(density(BHI_Undist_HsEs$hatching_prop, na.rm = TRUE), lwd = 2, col = "black", xlim = c(0, 1), 
+     xlab = "Hatching Proportion", main = "Hatching Success")
+lines(density(BHI_Cc_Nests$hatching_prop, na.rm = TRUE), lwd = 2, col = "red")
+legend("topleft", legend = c("Undisturbed", "All Nests"), col = c("black", "red"), lwd = c(2,2), bty = "n")
+
+plot(density(BHI_Undist_HsEs$emergence_prop, na.rm = TRUE), lwd = 2, col = "black", xlim = c(0, 1), 
+     xlab = "Emergence Proportion", main = "Emergence Success")
+lines(density(BHI_Cc_Nests$emergence_prop, na.rm = TRUE), lwd = 2, col = "red")
+legend("topleft", legend = c("Undisturbed", "All Nests"), col = c("black", "red"), lwd = c(2,2), bty = "n")
+
+```
+  
+Hatching success is variable from year to year. Observed annual mean hatching success has ranged from 51.6% $\pm$ 37.5% (1995) to 93.6% $\pm$ 7.5% in 2007. The 2023 average was 89.2% $\pm$ 9.4%.  
+  
+```{r Hs_AnnualAverage_plot, fig.width = 6, fig.height = 4, warning = FALSE, message = FALSE}
+
+HSxYear <- BHI_Undist_HsEs %>%
+  group_by(year) %>%
+  summarise("mean" = round(mean(hatching_prop), 3), "sd" = round(sd(hatching_prop), 3), "n" = n())
+
+ggplot() +
+  geom_point(data = HSxYear, aes(x = year, y = mean), pch = 16, color = rgb(125, 125, 125, alpha = 75, maxColorValue = 255)) +  
+  geom_smooth(data = HSxYear, aes(x = year, y = mean), lwd = 1, col = "black") +
+  ylim(0.5, 1) +
+  ylab("Hatching Proportion") +
+  xlim(1991, 2023) +
+  xlab("Year") +
+  ggtitle("B.") +
+  theme_classic(base_size = 12)
+
+knitr::kable(HSxYear, caption = "Average hatching success on Bald Head Island by year")
+
+```
+  
+Year is a significant variable with respect to hatching success, but it is a poor descriptor as Year alone only explains 26.7% of the observed variance.
+  
+*Beta GAM*, $Duration = \beta_0 + f(Year) + \epsilon$  
+  
+```{r plot_hs_bhi_undist, message = FALSE, warning = FALSE}
+
+summary(gam(Hatch_Trans ~ s(year), data = BHI_Undist_HsEs, family = betar(link = "logit")))
+
+```
+  
+## Five-Year Averages  
+  
+To help smooth out this variability, 5-year moving averages are presented below.  
+  
+```{r HsEs_5yrMovingAverage}
+
+HsEs_5yrMovingAvg <- matrix(data = NA, nrow = 29, ncol = 6)
+yearStart <- seq(from = 1991, to = 2019, by = 1)
+yearEnd <- seq(from = 1995, to = 2023, by = 1)
+
+HsEs_5yrMovingAvg[,1] <- yearStart; HsEs_5yrMovingAvg[,2] <- yearEnd
+
+for(i in 1:length(yearStart)){
+  HsEs_5yrMovingAvg[i, 3] <- round(mean(BHI_Undist_HsEs[which(BHI_Undist_HsEs$year >= yearStart[i] &
+                                                                      BHI_Undist_HsEs$year <= yearEnd[i]),]$hatching_prop, na.rm = TRUE), 3)
+  HsEs_5yrMovingAvg[i, 4] <- round(sd(BHI_Undist_HsEs[which(BHI_Undist_HsEs$year >= yearStart[i] &
+                                                                      BHI_Undist_HsEs$year <= yearEnd[i]),]$hatching_prop, na.rm = TRUE), 3)
+  HsEs_5yrMovingAvg[i, 5] <- round(mean(BHI_Undist_HsEs[which(BHI_Undist_HsEs$year >= yearStart[i] &
+                                                                      BHI_Undist_HsEs$year <= yearEnd[i]),]$emergence_prop, na.rm = TRUE), 3)
+  HsEs_5yrMovingAvg[i, 6] <- round(sd(BHI_Undist_HsEs[which(BHI_Undist_HsEs$year >= yearStart[i] &
+                                                                      BHI_Undist_HsEs$year <= yearEnd[i]),]$emergence_prop, na.rm = TRUE), 3)
+}
+
+HsEs_5yrMovingAvg <- cbind(incDurs_5yrMovingAvg, HsEs_5yrMovingAvg[,c(3:6)], met_5yrMovingAvg[,c(3:8)])
+
+HsEs_5yrMovingAvg <- as.data.frame(HsEs_5yrMovingAvg)
+HsEs_5yrMovingAvg <- HsEs_5yrMovingAvg %>% mutate_all(~ifelse(is.infinite(.), NA, .))
+HsEs_5yrMovingAvg <- HsEs_5yrMovingAvg %>% mutate_all(~ifelse(is.nan(.), NA, .))
+
+colnames(HsEs_5yrMovingAvg) <- c("Year Start", "Year End", "Mean Duration", "SD Duration", "Mean HS", "SD HS", "Mean ES", "SD ES", "Mean Avg Temp", "SD Avg Temp", 
+                                 "Mean Max Temp", "SD Max Temp", "Mean Total Rain", "SD Total Rain")
+
+knitr::kable(HsEs_5yrMovingAvg, caption = "5-Year Averages of Incubation Durations, Hatchling Production, and Meteorology on Bald Head Island")
+
+```
+  
+## Hatching Success ~ f(Meteorological, Behavioral, and Maternal Variables)  
+  
+To test which meteorological variables are important drivers of hatching success, a nested model selection approach using AICc was employed. The full GAM includes average daily mean air temperature and average total precipitation experienced during incubation, as well as Year, Day Laid, Distance from the Ferry Port, Distance from the Dune Toe, Elevation, Clutch Size, and Maternal Identity as additional covariates:  
+  
+*Beta GAM*,  
+$Hs = \beta_0 + f_1(Air_{avg,i}) + f_2(Precip_i) + f_3(Year_i) + f_4(DayLaid_i) + f_5(DistFerry_i) +$  
+$f_6(DistDune_i) + f_7(Elevation_i) + f_8(ClutchSize_i) + \beta_1(FemaleID_i) + \epsilon_i$  
+  
+634 nests include observations for each of these variables. The best model includes total precipitation, year and day laid, elevation, and clutch size, but it only explains 33% of the deviance. Removing any of the variables results in a significant increase in AICc.  
+  
+```{r BHI_HsEs_removeOutliers}
+
+BHI_HsEs_Clean <- BHI_Undist_HsEs
+# start with 1370 nests
+
+outliers_Day <- boxplot(BHI_HsEs_Clean$day_laid, plot = FALSE)$out
+# No affected nests
+
+outliers_Beach <- boxplot(BHI_HsEs_Clean$beach_distance_m, plot = FALSE)$out
+BHI_HsEs_Clean <- BHI_HsEs_Clean[-which(BHI_HsEs_Clean$beach_distance_m %in% outliers_Beach),]
+# Removes 44 additional nests
+
+outliers_Dune <- boxplot(BHI_HsEs_Clean$dist_dune, plot = FALSE)$out
+BHI_HsEs_Clean <- BHI_HsEs_Clean[-which(BHI_HsEs_Clean$dist_dune %in% outliers_Dune),]
+# Removes 69 additional nest
+
+outliers_DEM <- boxplot(BHI_HsEs_Clean$dem_avg, plot = FALSE)$out
+BHI_HsEs_Clean <- BHI_HsEs_Clean[-which(BHI_HsEs_Clean$dem_avg %in% outliers_DEM),]
+# Removes 15 additional nest
+
+outliers_Clutch <- boxplot(BHI_HsEs_Clean$clutch_size, plot = FALSE)$out
+BHI_HsEs_Clean <- BHI_HsEs_Clean[-which(BHI_HsEs_Clean$clutch_size %in% outliers_Clutch),]
+# Removes 29 additional nest
+
+```
+  
+```{r HsEs_BHI_modelFit_correlation, fig.width = 8, fig.height = 4, message = FALSE, warning = FALSE}
+
+BHI_Undist_HsEs_Full <- BHI_HsEs_Clean[which(!is.na(BHI_HsEs_Clean$mean_avg_air) &
+                                                    !is.na(BHI_HsEs_Clean$mean_max_air) &
+                                                    !is.na(BHI_HsEs_Clean$total_precip) & 
+                                                    !is.na(BHI_HsEs_Clean$year) &
+                                                    !is.na(BHI_HsEs_Clean$day_laid) &
+                                                    !is.na(BHI_HsEs_Clean$beach_distance_m) & 
+                                                    !is.na(BHI_HsEs_Clean$dist_dune) & 
+                                                    !is.na(BHI_HsEs_Clean$dem_avg) &
+                                                    !is.na(BHI_HsEs_Clean$clutch_size) &
+                                                    !is.na(BHI_HsEs_Clean$turtle_id)),] # 631 observations
+
+```
+  
+```{r HsEs_BHI_modelFit_subset, message = FALSE, warning = FALSE}
+
+m_BHI_HsxFull_undist <- mgcv::gam(Hatch_Trans ~ s(mean_avg_air) + s(total_precip) + s(year) + s(day_laid) + s(beach_distance_m) + 
+                                                  s(dist_dune) + s(dem_avg) + s(clutch_size) + factor(turtle_id),
+                                           data = BHI_Undist_HsEs_Full, 
+                                           family = betar(link = "logit"), na.action = "na.fail")
+
+subset(MuMIn::dredge(m_BHI_HsxFull_undist, rank = "AICc"), delta < 10)
+
+```
+  
+*Potential issue with low sample size in 2002 (n = 6), 2006 (n = 5), 2007 (n = 9), and 2009 (n = 5)*  
+  
+```{r Hs_BHI_modelFinal, fig.width = 6, fig.height = 4, warning = FALSE, message = FALSE}
+
+BHI_Undist_Hs_Final <- BHI_HsEs_Clean[which(!is.na(BHI_HsEs_Clean$total_precip) &
+                                              !is.na(BHI_HsEs_Clean$year) &
+                                              !is.na(BHI_HsEs_Clean$day_laid) &
+                                              !is.na(BHI_HsEs_Clean$dem_avg) &
+                                              !is.na(BHI_HsEs_Clean$clutch_size)),] # 634 observations
+
+m_BHI_HsxFinal_undist <- mgcv::gam(Hatch_Trans ~ s(total_precip) + s(year) + s(day_laid) + s(dem_avg) + s(clutch_size),
+                                           data = BHI_Undist_Hs_Final, 
+                                           family = betar(link = "logit"), na.action = "na.fail")
+
+#subset(MuMIn::dredge(m_BHI_HsxFinal_undist, rank = "AICc"), delta < 2)
+
+#invisible(DHARMa::simulateResiduals(m_BHI_HsxFinal_undist, n = 5000, plot = TRUE))
+
+summary(m_BHI_HsxFinal_undist)
+
+knitr::kable(table(BHI_Undist_Hs_Final$year), caption = "Number of nests included in the above model per year")
+
+```
+
+  
+```{r BHI_Undist_Hs_trends, fig.width = 12, fig.height = 12, warning = FALSE, message = FALSE}
+
+newTotalPrecip <- seq(from = 6, to = 430, by = 1) # median = 199
+newDay <- seq(from = 132, to = 222, by = 1) # mean = 177
+newYear <- seq(from = 2002, to = 2023, by = 1)
+newDEM <- seq(from = -0.2, to = 5.1, by = 0.1) # median = 2.3
+newClutch <- seq(from = 58, to = 176, by = 1) # mean = 114
+
+# Predict Precipitation effect
+m_BHI_HsxFinal_predictPrecip <- predict.gam(m_BHI_HsxFinal_undist, 
+                  newdata = list(total_precip = newTotalPrecip, year = rep(2023, length(newTotalPrecip)), 
+                                 day_laid = rep(177, length(newTotalPrecip)),  dem_avg = rep(2.3, length(newTotalPrecip)), 
+                                 clutch_size = rep(114, length(newTotalPrecip))), 
+                  se.fit = TRUE)
+m_BHI_HsxFinal_predictPrecip_upper <- plogis(m_BHI_HsxFinal_predictPrecip$fit + (1.96 * m_BHI_HsxFinal_predictPrecip$se.fit))
+m_BHI_HsxFinal_predictPrecip_lower <- plogis(m_BHI_HsxFinal_predictPrecip$fit - (1.96 * m_BHI_HsxFinal_predictPrecip$se.fit))
+
+# Predict Day Laid effect
+m_BHI_HsxFinal_predictDay <- predict.gam(m_BHI_HsxFinal_undist, 
+                  newdata = list(total_precip = rep(199, length(newDay)), year = rep(2023, length(newDay)), 
+                                 day_laid = newDay, dem_avg = rep(2.3, length(newDay)), 
+                                 clutch_size = rep(114, length(newDay))), 
+                  se.fit = TRUE)
+m_BHI_HsxFinal_predictDay_upper <- plogis(m_BHI_HsxFinal_predictDay$fit + (1.96 * m_BHI_HsxFinal_predictDay$se.fit))
+m_BHI_HsxFinal_predictDay_lower <- plogis(m_BHI_HsxFinal_predictDay$fit - (1.96 * m_BHI_HsxFinal_predictDay$se.fit))
+
+# Predict Year effect
+m_BHI_HsxFinal_predictYear <- predict.gam(m_BHI_HsxFinal_undist, 
+                  newdata = list(total_precip = rep(199, length(newYear)), year = newYear, 
+                                 day_laid = rep(177, length(newYear)), dem_avg = rep(2.3, length(newYear)), 
+                                 clutch_size = rep(114, length(newYear))), 
+                  se.fit = TRUE)
+m_BHI_HsxFinal_predictYear_upper <- plogis(m_BHI_HsxFinal_predictYear$fit + (1.96 * m_BHI_HsxFinal_predictYear$se.fit))
+m_BHI_HsxFinal_predictYear_lower <- plogis(m_BHI_HsxFinal_predictYear$fit - (1.96 * m_BHI_HsxFinal_predictYear$se.fit))
+
+# Predict Elevation effect
+m_BHI_HsxFinal_predictElev <- predict.gam(m_BHI_HsxFinal_undist, 
+                  newdata = list(total_precip = rep(199, length(newDEM)), year = rep(2023, length(newDEM)), 
+                                 day_laid = rep(177, length(newDEM)), dem_avg = newDEM, 
+                                 clutch_size = rep(114, length(newDEM))), 
+                  se.fit = TRUE)
+m_BHI_HsxFinal_predictElev_upper <- plogis(m_BHI_HsxFinal_predictElev$fit + (1.96 * m_BHI_HsxFinal_predictElev$se.fit))
+m_BHI_HsxFinal_predictElev_lower <- plogis(m_BHI_HsxFinal_predictElev$fit - (1.96 * m_BHI_HsxFinal_predictElev$se.fit))
+
+# Predict Clutch Size effect
+m_BHI_HsxFinal_predictClutch <- predict.gam(m_BHI_HsxFinal_undist, 
+                  newdata = list(total_precip = rep(199, length(newClutch)), year = rep(2023, length(newClutch)), 
+                                 day_laid = rep(177, length(newClutch)), dem_avg = rep(2.3, length(newClutch)), 
+                                 clutch_size = newClutch), 
+                  se.fit = TRUE)
+m_BHI_HsxFinal_predictClutch_upper <- plogis(m_BHI_HsxFinal_predictClutch$fit + (1.96 * m_BHI_HsxFinal_predictClutch$se.fit))
+m_BHI_HsxFinal_predictClutch_lower <- plogis(m_BHI_HsxFinal_predictClutch$fit - (1.96 * m_BHI_HsxFinal_predictClutch$se.fit))
+
+#-------------
+
+par(mfrow = c(3, 2), family = "serif", mar = c(4.5, 5.0, 3, 0.5), bty = "n", las = 1, cex.axis = 1.2, cex.lab = 1.3, cex.main = 1.3)
+
+# Year Laid
+plot(jitter(BHI_Undist_Hs_Final$year, 1), BHI_Undist_Hs_Final$hatching_prop, 
+     pch = 16, col = rgb(125, 125, 125, alpha = 80, maxColorValue = 255),
+     xlim = c(2002, 2023), xlab = "Year Laid", ylab = "Hatching Proportion", main = "")
+lines(newYear, plogis(m_BHI_HsxFinal_predictYear$fit), lty = 1, lwd = 2, col = "blue")
+lines(newYear, m_BHI_HsxFinal_predictYear_upper, lty = 2, lwd = 1, col = "blue")
+lines(newYear, m_BHI_HsxFinal_predictYear_lower, lty = 2, lwd = 1, col = "blue")
+mtext("A. Year Laid", side = 3, line = 1, adj = 0, outer = FALSE, cex = 1.2)
+
+# Day Laid
+plot(BHI_Undist_Hs_Final$day_laid, BHI_Undist_Hs_Final$hatching_prop, 
+     pch = 16, col = rgb(125, 125, 125, alpha = 80, maxColorValue = 255),
+     xlim = c(130, 230), xlab = "Day Laid", ylab = "Hatching Proportion", main = "")
+lines(newDay, plogis(m_BHI_HsxFinal_predictDay$fit), lty = 1, lwd = 2, col = "blue")
+lines(newDay, m_BHI_HsxFinal_predictDay_upper, lty = 2, lwd = 1, col = "blue")
+lines(newDay, m_BHI_HsxFinal_predictDay_lower, lty = 2, lwd = 1, col = "blue")
+mtext("B. Day Laid", side = 3, line = 1, adj = 0, outer = FALSE, cex = 1.2)
+
+# Rainfall
+plot(BHI_Undist_Hs_Final$total_precip, BHI_Undist_Hs_Final$hatching_prop, 
+     pch = 16, col = rgb(125, 125, 125, alpha = 80, maxColorValue = 255),
+     xlim = c(0, 430), xlab = "Average Total Rainfall (mm)", ylab = "Hatching Proportion", main = "")
+lines(newTotalPrecip, plogis(m_BHI_HsxFinal_predictPrecip$fit), lty = 1, lwd = 2, col = "blue")
+lines(newTotalPrecip, m_BHI_HsxFinal_predictPrecip_upper, lty = 2, lwd = 1, col = "blue")
+lines(newTotalPrecip, m_BHI_HsxFinal_predictPrecip_lower, lty = 2, lwd = 1, col = "blue")
+mtext("C. Rainfall", side = 3, line = 1, adj = 0, outer = FALSE, cex = 1.2)
+
+# Elevation
+plot(BHI_Undist_Hs_Final$dem_avg, BHI_Undist_Hs_Final$hatching_prop, 
+     pch = 16, col = rgb(125, 125, 125, alpha = 80, maxColorValue = 255),
+     xlim = c(-0.5, 5), xlab = "Average Elevation (m NAVD88)", ylab = "Hatching Proportion", main = "")
+lines(newDEM, plogis(m_BHI_HsxFinal_predictElev$fit), lty = 1, lwd = 2, col = "blue")
+lines(newDEM, m_BHI_HsxFinal_predictElev_upper, lty = 2, lwd = 1, col = "blue")
+lines(newDEM, m_BHI_HsxFinal_predictElev_lower, lty = 2, lwd = 1, col = "blue")
+mtext("D. Elevation", side = 3, line = 1, adj = 0, outer = FALSE, cex = 1.2)
+
+# Clutch Size
+plot(BHI_Undist_Hs_Final$clutch_size, BHI_Undist_Hs_Final$hatching_prop, 
+     pch = 16, col = rgb(125, 125, 125, alpha = 80, maxColorValue = 255),
+     xlim = c(50, 200), xlab = "Clutch Size", ylab = "Hatching Proportion", main = "")
+lines(newClutch, plogis(m_BHI_HsxFinal_predictClutch$fit), lty = 1, lwd = 2, col = "blue")
+lines(newClutch, m_BHI_HsxFinal_predictClutch_upper, lty = 2, lwd = 1, col = "blue")
+lines(newClutch, m_BHI_HsxFinal_predictClutch_lower, lty = 2, lwd = 1, col = "blue")
+mtext("E. Clutch Size", side = 3, line = 1, adj = 0, outer = FALSE, cex = 1.2)
+
+```
+  
+When scaled in a linear model for a more simple effect size comparison, total precipitation has the strongest scaled effect (-0.230), followed by day laid (-0.121) and year (0.108). Elevation and clutch have weak scaled effects which 95% confidence interval significantly overlaps 0.  
+  
+```{r BHI_Undist_Hs_metDuring_effectSizes}
+
+round(confint(glmmTMB(Hatch_Trans ~ total_precip + year + day_laid + dem_avg + clutch_size,
+                                           data = BHI_Undist_Hs_Final, 
+                                           family = beta_family(link = "logit"), na.action = "na.fail")), 3)
+
+#round(plogis(confint(glmmTMB(Hatch_Trans ~ total_precip + year + day_laid + dem_avg + clutch_size,
+#                                           data = BHI_Undist_Hs_Final, 
+#                                           family = beta_family(link = "logit"), na.action = "na.fail"))), 3)
+
+round(confint(glmmTMB(Hatch_Trans ~ scale(total_precip) + scale(year) + scale(day_laid) + scale(dem_avg) + scale(clutch_size),
+                                           data = BHI_Undist_Hs_Final, 
+                                           family = beta_family(link = "logit"), na.action = "na.fail")), 3)
+
+```
+  
+## Rainfall Exploration  
+  
+Rainfall has significantly increased on the island since 2002. All else being equal, the increased rainfall could result in a decrease in hatching success of up to 5.8%.  
+  
+```{r hs_rain_year}
+
+paste0("Mean rainfall 2003-2007: ", 
+       round(mean(BHI_Undist_Hs_Final[which(BHI_Undist_Hs_Final$year >= 2003 & BHI_Undist_Hs_Final$year <= 2007),]$total_precip), 1),
+       " mm, Projected hatching success: ",
+       round(plogis(predict.gam(m_BHI_HsxFinal_undist,
+            newdata = list(total_precip = mean(BHI_Undist_Hs_Final[which(BHI_Undist_Hs_Final$year >= 2003 &
+                                                                                   BHI_Undist_Hs_Final$year <= 2007),]$total_precip), 
+                           year = 2023, day_laid = 176, dem_avg = 2.3, clutch_size = 114),
+            se.fit = FALSE)), 3))
+paste0("Mean rainfall 2019-2023: ", 
+       round(mean(BHI_Undist_Hs_Final[which(BHI_Undist_Hs_Final$year >= 2019 & BHI_Undist_Hs_Final$year <= 2023),]$total_precip), 1),
+       " mm, Projected hatching success: ",
+       round(plogis(predict.gam(m_BHI_HsxFinal_undist,
+            newdata = list(total_precip = mean(BHI_Undist_Hs_Final[which(BHI_Undist_Hs_Final$year >= 2019 &
+                                                                                   BHI_Undist_Hs_Final$year <= 2023),]$total_precip), 
+                           year = 2023, day_laid = 176, dem_avg = 2.3, clutch_size = 114),
+            se.fit = FALSE)), 3))
+
+```
+  
+## Day Laid Exploration  
+  
+The average deposition date of undisturbed nests has trended 0.217 days yr^-1^ earlier since 2002. This trend has no effect on hatching success on Bald Head Island.  
+  
+```{r hs_daylaid_year}
+
+paste0("Mean day laid 2003-2007: ", 
+       round(mean(BHI_Undist_Hs_Final[which(BHI_Undist_Hs_Final$year >= 2003 & BHI_Undist_Hs_Final$year <= 2007),]$day_laid), 1),
+       ", Projected hatching success: ",
+       round(plogis(predict.gam(m_BHI_HsxFinal_undist,
+            newdata = list(total_precip = 192, year = 2023, 
+                           day_laid = mean(BHI_Undist_Hs_Final[which(BHI_Undist_Hs_Final$year >= 2003 &
+                                                                                   BHI_Undist_Hs_Final$year <= 2007),]$day_laid), 
+                           dem_avg = 2.3, clutch_size = 114),
+            se.fit = FALSE)), 3))
+paste0("Mean day laid 2019-2023: ", 
+       round(mean(BHI_Undist_Hs_Final[which(BHI_Undist_Hs_Final$year >= 2019 & BHI_Undist_Hs_Final$year <= 2023),]$day_laid), 1),
+       ", Projected hatching success: ",
+       round(plogis(predict.gam(m_BHI_HsxFinal_undist,
+            newdata = list(total_precip = 192, year = 2023, 
+                           day_laid = mean(BHI_Undist_Hs_Final[which(BHI_Undist_Hs_Final$year >= 2019 &
+                                                                                   BHI_Undist_Hs_Final$year <= 2023),]$day_laid), 
+                           dem_avg = 2.3, clutch_size = 114),
+            se.fit = FALSE)), 3))
+
+```
+  
+## Elevation Exploration  
+  
+Nest elevation, based on the time-average DEM from 1998 - 2020, shows no long-term trend or significant effect on hatching success.  
+  
+```{r hs_elevation_year}
+
+paste0("Mean elevation 2003-2007: ", 
+       round(mean(BHI_Undist_Hs_Final[which(BHI_Undist_Hs_Final$year >= 2003 & BHI_Undist_Hs_Final$year <= 2007),]$dem_avg), 2),
+       " m NAVD88, Projected hatching success: ",
+       round(plogis(predict.gam(m_BHI_HsxFinal_undist,
+            newdata = list(total_precip = 192, year = 2023, day_laid = 176, 
+                           dem_avg = mean(BHI_Undist_Hs_Final[which(BHI_Undist_Hs_Final$year >= 2003 &
+                                                                                   BHI_Undist_Hs_Final$year <= 2007),]$dem_avg), 
+                           clutch_size = 114),
+            se.fit = FALSE)), 3))
+paste0("Mean elevation 2019-2023: ", 
+       round(mean(BHI_Undist_Hs_Final[which(BHI_Undist_Hs_Final$year >= 2019 & BHI_Undist_Hs_Final$year <= 2023),]$dem_avg), 2),
+       " m NAVD88, Projected incubation duration: ",
+       round(plogis(predict.gam(m_BHI_HsxFinal_undist,
+            newdata = list(total_precip = 192, year = 2023, day_laid = 176, 
+                           dem_avg = mean(BHI_Undist_Hs_Final[which(BHI_Undist_Hs_Final$year >= 2019 &
+                                                                                   BHI_Undist_Hs_Final$year <= 2023),]$dem_avg), 
+                           clutch_size = 114),
+            se.fit = FALSE)), 3))
+
+```
+  
+  
+## Clutch Size Exploration  
+  
+Clutch sizes from undisturbed nests show no long-term trend since 2002. Changes in clutch size through time are unlikely to explain any part of the recent lengthening of incubation durations on Bald Head Island.  
+  
+```{r hs_clutchsize_year}
+
+paste0("Mean clutch size 2003-2007: ", 
+       round(mean(BHI_Undist_Hs_Final[which(BHI_Undist_Hs_Final$year >= 2003 & BHI_Undist_Hs_Final$year <= 2007),]$clutch_size), 1),
+       " eggs, Projected hatching success: ",
+       round(plogis(predict.gam(m_BHI_HsxFinal_undist,
+            newdata = list(total_precip = 192, year = 2023, day_laid = 176, dem_avg = 2.3, 
+                           clutch_size = mean(BHI_Undist_Hs_Final[which(BHI_Undist_Hs_Final$year >= 2003 &
+                                                                                   BHI_Undist_Hs_Final$year <= 2007),]$clutch_size)),
+            se.fit = FALSE)), 3))
+paste0("Mean clutch size 2019-2023: ", 
+       round(mean(BHI_Undist_Hs_Final[which(BHI_Undist_Hs_Final$year >= 2019 & BHI_Undist_Hs_Final$year <= 2023),]$clutch_size), 1),
+       " eggs, Projected hatching success: ",
+       round(plogis(predict.gam(m_BHI_HsxFinal_undist,
+            newdata = list(total_precip = 192, year = 2023, day_laid = 176, dem_avg = 2.3, 
+                           clutch_size = mean(BHI_Undist_Hs_Final[which(BHI_Undist_Hs_Final$year >= 2019 &
+                                                                                   BHI_Undist_Hs_Final$year <= 2023),]$clutch_size)),
+            se.fit = FALSE)), 3))
+
+```
+  
+***  
+***  
+  
+\newpage  
+  
+# References  
+  
+```{r r_session_info, R.options = list(width = 60)}
+
+report(sessionInfo()) # Reports the citation information for the packages used in this analysis
+
+```
+  

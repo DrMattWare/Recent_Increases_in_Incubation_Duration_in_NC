@@ -1,0 +1,1631 @@
+---
+title: "Appendix A: Generation of the Bald Head Island meteorological time series"
+subtitle: "Companion to *Recent increases in male sea turtle hatchling production on a North Carolina, USA beach despite a warming climate*"
+author: 
+  - name: "Dr. Matt Ware"
+    affiliation: "University of North Carolina Wilmington Center for Marine Science"
+    email: "warem@uncw.edu"
+    url: "https://WareResearch.com"
+  - name: "Paul Hillbrand"
+    affiliation: "Bald Head Island Conservancy"
+    email: "seaturtle@bhic.org"
+  - name: "Ali Johnson"
+    affiliation: "Bald Head Island Conservancy"
+    email: "alijohnson0123@gmail.com"
+  - name: "Dr. Stephanie Kamel"
+    affiliation: "University of North Carolina Wilmington Center for Marine Science"
+    email: "kamels@uncw.edu"
+  - name: "Dr. Beth Darrow"
+    affiliation: "Bald Head Island Conservancy"
+    email: "darrow@bhic.org"
+date: "`r Sys.Date()`"
+keywords: ["air temperature", "Bald Head Island", "barrier island", "climate change", "climatology", "meteorology", "North Carolina", "precipitation", "rainfall", "weather"]
+output: 
+  html_document:
+    theme: journal
+    toc: true
+    toc_depth: 4
+    number_sections: true
+    toc_float: true
+  pdf_document:
+    toc: true
+    toc_depth: 4
+    number_sections: true
+  word_document:
+    toc: false
+    number_sections: false
+geometry: margin=1in 
+always_allow_html: true
+urlcolor: blue
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = FALSE)
+
+
+# Export Options
+
+knitHTML <- TRUE
+
+```
+  
+# DESCRIPTION  
+  
+Environmental conditions play a critical role in sea turtle embryonic development, controlling incubation temperature, moisture, gas exchange, salinity, and other variables to which the developing embryos must respond. Temperature, in particular, has a long-established link to hatchling sex ratios and mortality rates. The role of moisture from either waves or rainfall has been gaining increased attention in light of climate change concerns as a potential means to mediate feminization and mortality issues at tropical beaches.  
+  
+*In situ* meteorological observations on Bald Head Island itself have historically been unavailable. The North Carolina State Climate Office began monitoring air temperature, wind speed and direction, barometric pressure, humidity, precipitation, solar radiation, soil temperature, soil moisture, and leaf wetness on the island on 23 June 2015 near the southeast point of the island (33.85$^\circ N$, 77.97$^\circ W$, https://products.climate.ncsu.edu/cardinal/scout/?station=BALD). This station was moved to the southwest point on 1 May 2023 (33.87$^\circ N$, 78.00$^\circ W$, https://products.climate.ncsu.edu/cardinal/scout/?station=BHIC), and operates to the present day.  
+  
+Off-island, meteorological data can be extracted from the Brunswick County Airport and Sunny Point Military Ocean Terminal. The Brunswick Airport (33.93$^\circ N$, 78.08$^\circ W$, https://products.climate.ncsu.edu/cardinal/scout/?station=KSUT) reports air temperature, dew point, barometric pressure, humidity, precipitation, wind speed and direction, visibility, and present weather conditions every 20 minutes as part of the Federal Aviation Administration's AWOS network for METAR reports needed by pilots on approach to, or departure from, the airport. Data from this station has been available since 24 February 2002. Further upriver, the Sunny Point Terminal has hosted two stations. The currently operating station (34.00$^\circ N$, 78.00$^\circ W$, https://products.climate.ncsu.edu/cardinal/scout/?station=SUNN7) has reported air temperature, dew point, barometric pressure, precipitation, and wind gusts since 18 January 2002. A long-term National Weather Service COOP station (33.99$^\circ N$, 78.01$^\circ W$, https://products.climate.ncsu.edu/cardinal/scout/?station=318113), in operation since 1 January 1892, reported min/max air temperature and precipitation daily until 31 March 2016.  
+  
+  
+## Libraries  
+  
+The following libraries were used throughout the subsequent analyses.   
+  
+```{r libraries, message = FALSE, warning = FALSE, results = FALSE, echo = TRUE}
+
+library(dplyr)
+library(janitor)
+library(knitr)
+library(leaflet)
+library(mgcv)
+library(readxl)
+library(report)
+library(rWind)
+library(sf)
+library(tmap)
+library(tmaptools)
+
+```
+  
+```{r useful_functions, echo = FALSE}
+
+deg2rad <- function(deg){ # convert degrees to radians
+  (deg*pi)/180
+}
+
+rad2deg <- function(rad){ # convert radians to degrees
+  (rad*180)/pi
+}
+
+DirectionUV <- function(Angle, Speed, Type = "Wind_Waves"){ # Decomposes heading vectors into U and V components. By convention, Wind and Waves are reported as the direction they are moving from, whereas currents are reported as their heading
+  if(is.na(Angle)){
+    cbind(NA, NA)
+  } else if(is.na(Speed)){
+    cbind(NA, NA)
+  } else if(Type == "Wind_Waves") {
+    if(Angle >= 180){
+      unname(rWind::ds2uv(d = Angle - 180, s = Speed)) # rWind ds2uv "dir" argument denotes wind/wave heading not where it is originating from
+    } else { # the above and below conditional statements convert "Angle" direction reported in data to "dir" heading used in ds2uv function
+      unname(rWind::ds2uv(d = Angle + 180, s = Speed)) 
+    }
+  } else if(Type == "Currents"){
+    unname(rWind::ds2uv(d = Angle, s = Speed))
+  } else if(Type != "Wind_Waves" & Type != "Currents"){ 
+    return("Input Type must be either 'Wind_Waves' or 'Currents'.")
+    break
+  } else {
+    return("Error. Please double-check your input.")
+    break
+  }
+}
+
+MeanDirection <- function(Ucomp, Vcomp, sourceDirectionUV = TRUE, Type = "Wind_Waves"){ # vector averaging
+  temp <- round(rad2deg(atan2(x = mean(Vcomp, na.rm = TRUE), y = mean(Ucomp, na.rm = TRUE))), 2) #Ucomp is the 1st column from DirectionUV, Vcomp is column #2
+  if(is.na(temp)){
+    return(NA)
+  } else if(sourceDirectionUV == TRUE){
+    if(Type == "Wind_Waves"){
+      if(temp < 180){ # Conditionals convert heading calculated above back to direction "From" to match buoy/gauge data inputs
+      temp + 180
+      } else {
+      temp - 180
+      }
+    } else if(Type == "Currents"){
+    temp # no conversion necessary as Current data is already reported as heading
+    } else if(Type != "Wind_Waves" & Type != "Currents"){
+    return("Input Type must be either 'Wind_Waves' or 'Currents'.")
+    break
+    } else {
+    return("Error. Please double-check your input.")
+    break
+    }
+  } else { # user is providing U and V components from an outside source
+    if(temp < 0){
+      temp + 360
+    } else {
+      temp
+    }
+  }
+}
+
+```
+  
+# BALD HEAD ISLAND AND NEARBY METEOROLOGY STATIONS  
+  
+```{r BHI_station_table}
+
+BHI_met_stations <- as.data.frame(cbind(c(rep("Meteorology", 5)), 
+                                        c("BHIC", "BALD", "Brunswick", "Sunny Point", "Southport"),
+                                        c("2023-05-01", "2015-06-23", "2002-02-24", "2002-01-18", "1892-01-01"),
+                                        c("Present", "2023-05-01", "Present", "Present", "2016-03-31"),
+                                        c(33.8633, 33.84583, 33.929, 34.00377, 33.99472),
+                                        c(-77.9983, -77.96583, -78.075, -77.99766, -78.00778)))
+colnames(BHI_met_stations) <- c("Type", "Station", "Start", "End", "Latitude", "Longitude")
+
+knitr::kable(BHI_met_stations, captions = "Meteorological station details for Bald Head Island")
+
+```
+  
+```{r BHI_station_map_static, warning = FALSE, message = FALSE, fig.width = 4, fig.height = 5}
+
+BHI_met_stations_WGS84 <- st_as_sf(BHI_met_stations, coords = c("Longitude", "Latitude"), crs = 4326, na.fail = TRUE)
+BHI_met_stations_NCSP <- st_transform(BHI_met_stations_WGS84, crs = 32119)
+
+
+NC_Shore <- st_read(dsn = "GIS/ShorePoly_NorthCarolina.shp", quiet = TRUE)
+
+
+#------------
+
+BHI_metMap <- tm_shape(NC_Shore, bbox = bb(xlim = c(693838, 710629), ylim = c(08930, 31920))) +
+  tm_polygons(col = "grey", border.alpha = 0) +
+  tm_shape(BHI_met_stations_NCSP[BHI_met_stations_NCSP$Type == "Meteorology",]) +
+    tm_dots(col = "red", size = 0.3) +
+    tm_text("Station", size = 0.7, just = "bottom", ymod = 0.5, col = "darkblue") + 
+  tm_compass(type = "4star", size = 2, text.size = 0.8, position = c(0.05, 0.22)) + 
+  tm_scale_bar(position = c(0.05, 0.05), text.size = 0.8) + 
+  tm_credits("NAD83 State Plane\nNorth Carolina", position = c(0.05, 0.13)) +
+  tm_credits("Cape Fear River", position = c(0.42, 0.38), size = 0.5, alpha = 0.7) +
+  tm_layout(title = "Meteorology Stations\nBald Head Island", title.size = 1.2, title.position = c("left", 0.95), 
+            legend.text.size = 0.8, legend.bg.color = "lightgrey", legend.position = c(0.03, 0.65), fontfamily = "serif", frame = FALSE)
+
+BHI_metMap
+
+```
+  
+```{r BHI_station_leafletMap, message = FALSE, warning = FALSE, eval = knitHTML}
+
+BHI_metleafletMap <- leaflet() %>% 
+  fitBounds(lat1 = 33.83, lng1 = -78.10, lat2 = 34.05, lng2 = -77.95) %>%
+  addTiles() %>%
+  addCircles(data = BHI_met_stations_WGS84[BHI_met_stations_WGS84$Type == "Meteorology",], color = "red", radius = 2, 
+             fillOpacity = 1.0)
+  
+BHI_metleafletMap
+
+```
+  
+\newpage  
+  
+# METEOROLOGICAL DATA CORRELATIONS  
+  
+```{r data_import_weatherBHI, message = FALSE, warning = FALSE}
+
+weather_BHI <- readxl::read_excel("Weather Station Comparison 1991-2022.xlsx", sheet = "Long") 
+
+weather_BHI <- janitor::clean_names(weather_BHI)
+
+#--------------
+
+weather_BHI$max_air_temp <- as.numeric(weather_BHI$max_air_temp)
+weather_BHI$min_air_temp <- as.numeric(weather_BHI$min_air_temp)
+weather_BHI$avg_air_temp <- as.numeric(weather_BHI$avg_air_temp)
+weather_BHI$precipitation <- as.numeric(weather_BHI$precipitation)
+weather_BHI$avg_wind_speed <- as.numeric(weather_BHI$avg_wind_speed)
+weather_BHI$avg_wind_direction <- as.numeric(weather_BHI$avg_wind_direction)
+weather_BHI$max_solar_radiation <- as.numeric(weather_BHI$max_solar_radiation)
+
+```
+  
+Since meteorological data is only available on-island starting in 2015, the correlation of the mainland stations with observations on Bald Head Island were investigated in order to extrapolate environmental conditions to a greater percentage of the nesting data.  
+  
+## Maximum Daily Air Temperature  
+  
+```{r maxAirTemp_BHI_plot, fig.width = 12, fig.height = 16}
+
+par(mfrow = c(4, 1), family = "serif", mar = c(4.5, 5.0, 3, 0.5), bty = "n", las = 1, cex.axis = 1.2, cex.lab = 1.3, cex.main = 1.3)
+
+plot(weather_BHI[weather_BHI$station == "Brunswick Airport",]$date, weather_BHI[weather_BHI$station == "Brunswick Airport",]$max_air_temp,
+     type = "l", lty = 1, lwd = 1, col = "black", xlab = "Date", ylab = "Temperature", main = "Maximum Daily Temperature")
+lines(weather_BHI[weather_BHI$station == "NCSU BALD",]$date, weather_BHI[weather_BHI$station == "NCSU BALD",]$max_air_temp,
+      lty = 1, lwd = 1, col = "red")
+lines(weather_BHI[weather_BHI$station == "Sunny Point",]$date, weather_BHI[weather_BHI$station == "Sunny Point",]$max_air_temp,
+      lty = 1, lwd = 1, col = "blue")
+lines(weather_BHI[weather_BHI$station == "Southport COOP",]$date, weather_BHI[weather_BHI$station == "Southport COOP",]$max_air_temp,
+      lty = 1, lwd = 1, col = "darkgreen")
+legend("topleft", legend = c("Brunswick Airport", "NCSU BALD", "Sunny Point", "Southport COOP"), lty = c(1,1,1,1), lwd = c(1,1,1,1),
+       col = c("black", "red", "blue", "darkgreen"), bty = 'n')
+
+plot(weather_BHI[weather_BHI$station == "Brunswick Airport",]$date, weather_BHI[weather_BHI$station == "Brunswick Airport",]$precipitation,
+     type = "l", lty = 1, lwd = 1, col = "black", xlab = "Date", ylab = "Precipitation", main = "Daily Precipitation")
+lines(weather_BHI[weather_BHI$station == "NCSU BALD",]$date, weather_BHI[weather_BHI$station == "NCSU BALD",]$precipitation,
+      lty = 1, lwd = 1, col = "red")
+lines(weather_BHI[weather_BHI$station == "Sunny Point",]$date, weather_BHI[weather_BHI$station == "Sunny Point",]$precipitation,
+      lty = 1, lwd = 1, col = "blue")
+lines(weather_BHI[weather_BHI$station == "Southport COOP",]$date, weather_BHI[weather_BHI$station == "Southport COOP",]$precipitation,
+      lty = 1, lwd = 1, col = "darkgreen")
+legend("topleft", legend = c("Brunswick Airport", "NCSU BALD", "Sunny Point", "Southport COOP"), lty = c(1,1,1,1), lwd = c(1,1,1,1),
+       col = c("black", "red", "blue", "darkgreen"), bty = 'n')
+
+plot(weather_BHI[weather_BHI$station == "Brunswick Airport",]$date, weather_BHI[weather_BHI$station == "Brunswick Airport",]$avg_wind_speed,
+     type = "l", lty = 1, lwd = 1, col = "black", xlab = "Date", ylab = "Wind Speed", main = "Average Daily Wind Speed")
+lines(weather_BHI[weather_BHI$station == "NCSU BALD",]$date, weather_BHI[weather_BHI$station == "NCSU BALD",]$avg_wind_speed,
+      lty = 1, lwd = 1, col = "red")
+lines(weather_BHI[weather_BHI$station == "Sunny Point",]$date, weather_BHI[weather_BHI$station == "Sunny Point",]$avg_wind_speed,
+      lty = 1, lwd = 1, col = "blue")
+lines(weather_BHI[weather_BHI$station == "Southport COOP",]$date, weather_BHI[weather_BHI$station == "Southport COOP",]$avg_wind_speed,
+      lty = 1, lwd = 1, col = "darkgreen")
+legend("topleft", legend = c("Brunswick Airport", "NCSU BALD", "Sunny Point", "Southport COOP"), lty = c(1,1,1,1), lwd = c(1,1,1,1),
+       col = c("black", "red", "blue", "darkgreen"), bty = 'n')
+
+plot(weather_BHI[weather_BHI$station == "NCSU BALD",]$date, weather_BHI[weather_BHI$station == "NCSU BALD",]$max_solar_radiation,
+     type = "l", lty = 1, lwd = 1, col = "red", xlab = "Date", ylab = "Solar Radiation", main = "Maximum Daily Solar Radiation")
+lines(weather_BHI[weather_BHI$station == "Brunswick Airport",]$date, weather_BHI[weather_BHI$station == "Brunswick Airport",]$max_solar_radiation,
+      lty = 1, lwd = 1, col = "blue")
+lines(weather_BHI[weather_BHI$station == "Sunny Point",]$date, weather_BHI[weather_BHI$station == "Sunny Point",]$max_solar_radiation,
+      lty = 1, lwd = 1, col = "blue")
+lines(weather_BHI[weather_BHI$station == "Southport COOP",]$date, weather_BHI[weather_BHI$station == "Southport COOP",]$max_solar_radiation,
+      lty = 1, lwd = 1, col = "darkgreen")
+legend("topleft", legend = c("Brunswick Airport", "NCSU BALD", "Sunny Point", "Southport COOP"), lty = c(1,1,1,1), lwd = c(1,1,1,1),
+       col = c("black", "red", "blue", "darkgreen"), bty = 'n')
+
+```
+  
+Maximum daily air temperatures were well correlated across each combination of stations. Correlations with Bald Head Island (NCSU BALD 2015-2022) ranged from 92.3% (Southport COOP) to 97.7% (Brunswick Airport). 
+  
+```{r weather_correlations_BHI_maxAirTemp_stats}
+
+# Assemble maximum air temperature data
+corMaxAir <- as.data.frame(cbind(weather_BHI[weather_BHI$station == "Brunswick Airport",]$max_air_temp, 
+                                 weather_BHI[weather_BHI$station == "NCSU BALD",]$max_air_temp,
+                                 weather_BHI[weather_BHI$station == "Southport COOP",]$max_air_temp,
+                                 weather_BHI[weather_BHI$station == "Sunny Point",]$max_air_temp))
+colnames(corMaxAir) <- c("brunswick", "BALD", "southport", "sunny_point")
+
+# Pearson correlation tests
+cor.test(corMaxAir$brunswick, corMaxAir$BALD, method = "pearson")
+cor.test(corMaxAir$southport, corMaxAir$BALD, method = "pearson")
+cor.test(corMaxAir$sunny_point, corMaxAir$BALD, method = "pearson")
+cor.test(corMaxAir$brunswick, corMaxAir$southport, method = "pearson")
+cor.test(corMaxAir$brunswick, corMaxAir$sunny_point, method = "pearson")
+cor.test(corMaxAir$southport, corMaxAir$sunny_point, method = "pearson")
+
+# Linear relationships
+m_MaxTemps_BALD_Brunswick <- lm(BALD ~ brunswick, data = corMaxAir)
+m_MaxTemps_BALD_Southport <- lm(BALD ~ southport, data = corMaxAir)
+m_MaxTemps_BALD_Sunny <- lm(BALD ~ sunny_point, data = corMaxAir)
+m_MaxTemps_Brunswick_Southport <- lm(brunswick ~ southport, data = corMaxAir)
+m_MaxTemps_Brunswick_Sunny <- lm(brunswick ~ sunny_point, data = corMaxAir)
+m_MaxTemps_Southport_Sunny <- lm(southport ~ sunny_point, data = corMaxAir)
+
+summary(m_MaxTemps_BALD_Brunswick)
+summary(m_MaxTemps_BALD_Southport)
+summary(m_MaxTemps_BALD_Sunny)
+summary(m_MaxTemps_Brunswick_Southport)
+summary(m_MaxTemps_Brunswick_Sunny)
+summary(m_MaxTemps_Southport_Sunny)
+
+```
+```{r weather_correlations_BHI_maxAirTemp_plots, fig.height = 8, fig.width = 15}
+
+maxTemps <- seq(from = -10, to = 40, by = 1)
+
+par(mfrow = c(2, 3), family = "serif", mar = c(4.5, 5.0, 0.5, 0.5), bty = "n", las = 1, cex.axis = 1.2, cex.lab = 1.2, cex.main = 1.3)
+
+plot(corMaxAir$brunswick, corMaxAir$BALD, pch = 16, col = rgb(40, 40, 40, alpha = 40, maxColorValue = 255), 
+     xlab = "Max Air Temp - Brunswick Airport", xlim = c(-10, 40), ylab = "Max Air Temp - NCSU BALD", ylim = c(-10, 40), main = "")
+lines(maxTemps, predict(m_MaxTemps_BALD_Brunswick, newdata = list(brunswick = maxTemps), se.fit = FALSE), lty = 1, lwd = 2, col = "blue")
+mtext(paste0("BALD = ", round(coef(m_MaxTemps_BALD_Brunswick)[1], 3), 
+             ifelse(sign(coef(m_MaxTemps_BALD_Brunswick)[2]) == 1, " + ", " - "),
+             abs(round(coef(m_MaxTemps_BALD_Brunswick)[2], 3)), "Brunswick"),
+      side = 3, line = -2, cex = 0.8)
+mtext(paste0("Correlation = ", round(cor.test(corMaxAir$brunswick, corMaxAir$BALD, method = "pearson")$estimate, 4)),
+      side = 3, line = -3, cex = 0.8)
+
+plot(corMaxAir$southport, corMaxAir$BALD, pch = 16, col = rgb(40, 40, 40, alpha = 40, maxColorValue = 255), 
+     xlab = "Max Air Temp - Southport COOP", xlim = c(-10, 40), ylab = "Max Air Temp - NCSU BALD", ylim = c(-10, 40), main = "")
+lines(maxTemps, predict(m_MaxTemps_BALD_Southport, newdata = list(southport = maxTemps), se.fit = FALSE), lty = 1, lwd = 2, col = "blue")
+mtext(paste0("BALD = ", round(coef(m_MaxTemps_BALD_Southport)[1], 3), ifelse(sign(coef(m_MaxTemps_BALD_Southport)[2]) == 1, " + ", " - "),
+             abs(round(coef(m_MaxTemps_BALD_Southport)[2], 3)), "Southport"),
+      side = 3, line = -2, cex = 0.8)
+mtext(paste0("Correlation = ", round(cor.test(corMaxAir$southport, corMaxAir$BALD, method = "pearson")$estimate, 4)),
+      side = 3, line = -3, cex = 0.8)
+
+plot(corMaxAir$sunny_point, corMaxAir$BALD, pch = 16, col = rgb(40, 40, 40, alpha = 40, maxColorValue = 255), 
+     xlab = "Max Air Temp - Sunny Point", xlim = c(-10, 40), ylab = "Max Air Temp - NCSU BALD", ylim = c(-10, 40), main = "")
+lines(maxTemps, predict(m_MaxTemps_BALD_Sunny, newdata = list(sunny_point = maxTemps), se.fit = FALSE), lty = 1, lwd = 2, col = "blue")
+mtext(paste0("BALD = ", round(coef(m_MaxTemps_BALD_Sunny)[1], 3), ifelse(sign(coef(m_MaxTemps_BALD_Sunny)[2]) == 1, " + ", " - "),
+             abs(round(coef(m_MaxTemps_BALD_Sunny)[2], 3)), "Sunny Point"),
+      side = 3, line = -2, cex = 0.8)
+mtext(paste0("Correlation = ", round(cor.test(corMaxAir$sunny_point, corMaxAir$BALD, method = "pearson")$estimate, 4)),
+      side = 3, line = -3, cex = 0.8)
+
+plot(corMaxAir$southport, corMaxAir$brunswick, pch = 16, col = rgb(40, 40, 40, alpha = 40, maxColorValue = 255), 
+     xlab = "Max Air Temp - Southport COOP", xlim = c(-10, 40), ylab = "Max Air Temp - Brunswick Airport", ylim = c(-10, 40), main = "")
+lines(maxTemps, predict(m_MaxTemps_Brunswick_Southport, newdata = list(southport = maxTemps), se.fit = FALSE), lty = 1, lwd = 2, col = "blue")
+mtext(paste0("Brunswick = ", round(coef(m_MaxTemps_Brunswick_Southport)[1], 3), ifelse(sign(coef(m_MaxTemps_Brunswick_Southport)[2]) == 1, " + ", " - "),
+             abs(round(coef(m_MaxTemps_Brunswick_Southport)[2], 3)), "Southport"),
+      side = 3, line = -2, cex = 0.8)
+mtext(paste0("Correlation = ", round(cor.test(corMaxAir$southport, corMaxAir$brunswick, method = "pearson")$estimate, 4)),
+      side = 3, line = -3, cex = 0.8)
+
+plot(corMaxAir$sunny_point, corMaxAir$brunswick, pch = 16, col = rgb(40, 40, 40, alpha = 40, maxColorValue = 255), 
+     xlab = "Max Air Temp - Sunny Point", xlim = c(-10, 40), ylab = "Max Air Temp - Brunswick Airport", ylim = c(-10, 40), main = "")
+lines(maxTemps, predict(m_MaxTemps_Brunswick_Sunny, newdata = list(sunny_point = maxTemps), se.fit = FALSE), lty = 1, lwd = 2, col = "blue")
+mtext(paste0("Brunswick = ", round(coef(m_MaxTemps_Brunswick_Sunny)[1], 3), ifelse(sign(coef(m_MaxTemps_Brunswick_Sunny)[2]) == 1, " + ", " - "),
+             abs(round(coef(m_MaxTemps_Brunswick_Sunny)[2], 3)), "Sunny_Point"),
+      side = 3, line = -2, cex = 0.8)
+mtext(paste0("Correlation = ", round(cor.test(corMaxAir$sunny_point, corMaxAir$brunswick, method = "pearson")$estimate, 4)),
+      side = 3, line = -3, cex = 0.8)
+
+plot(corMaxAir$sunny_point, corMaxAir$southport, pch = 16, col = rgb(40, 40, 40, alpha = 40, maxColorValue = 255), 
+     xlab = "Max Air Temp - Sunny Point", xlim = c(-10, 40), ylab = "Max Air Temp - Southport COOP", ylim = c(-10, 40), main = "")
+lines(maxTemps, predict(m_MaxTemps_Southport_Sunny, newdata = list(sunny_point = maxTemps), se.fit = FALSE), lty = 1, lwd = 2, col = "blue")
+mtext(paste0("Southport = ", round(coef(m_MaxTemps_Southport_Sunny)[1], 3), ifelse(sign(coef(m_MaxTemps_Southport_Sunny)[2]) == 1, " + ", " - "),
+             abs(round(coef(m_MaxTemps_Southport_Sunny)[2], 3)), "Sunny_Point"),
+      side = 3, line = -2, cex = 0.8)
+mtext(paste0("Correlation = ", round(cor.test(corMaxAir$sunny_point, corMaxAir$southport, method = "pearson")$estimate, 4)),
+      side = 3, line = -3, cex = 0.8)
+
+```
+  
+\newpage  
+
+## Minimum Daily Air Temperature  
+  
+Minimum daily air temperatures were equally well correlated across each combination of stations. Correlations with Bald Head Island (NCSU BALD 2015-2022) ranged from 93.5% (Southport COOP) to 97.7% (Sunny Point). 
+  
+```{r weather_correlations_BHI_minAirTemp_stats}
+
+# Assemble minimum air temperature data
+corMinAir <- as.data.frame(cbind(weather_BHI[weather_BHI$station == "Brunswick Airport",]$min_air_temp, 
+                                 weather_BHI[weather_BHI$station == "NCSU BALD",]$min_air_temp,
+                                 weather_BHI[weather_BHI$station == "Southport COOP",]$min_air_temp,
+                                 weather_BHI[weather_BHI$station == "Sunny Point",]$min_air_temp))
+colnames(corMinAir) <- c("brunswick", "BALD", "southport", "sunny_point")
+
+# Pearson correlation tests
+cor.test(corMinAir$brunswick, corMinAir$BALD, method = "pearson")
+cor.test(corMinAir$southport, corMinAir$BALD, method = "pearson")
+cor.test(corMinAir$sunny_point, corMinAir$BALD, method = "pearson")
+cor.test(corMinAir$brunswick, corMinAir$southport, method = "pearson")
+cor.test(corMinAir$brunswick, corMinAir$sunny_point, method = "pearson")
+cor.test(corMinAir$southport, corMinAir$sunny_point, method = "pearson")
+
+# Linear relationships
+m_MinTemps_BALD_Brunswick <- lm(BALD ~ brunswick, data = corMinAir)
+m_MinTemps_BALD_Southport <- lm(BALD ~ southport, data = corMinAir)
+m_MinTemps_BALD_Sunny <- lm(BALD ~ sunny_point, data = corMinAir)
+m_MinTemps_Brunswick_Southport <- lm(brunswick ~ southport, data = corMinAir)
+m_MinTemps_Brunswick_Sunny <- lm(brunswick ~ sunny_point, data = corMinAir)
+m_MinTemps_Southport_Sunny <- lm(southport ~ sunny_point, data = corMinAir)
+
+summary(m_MinTemps_BALD_Brunswick)
+summary(m_MinTemps_BALD_Southport)
+summary(m_MinTemps_BALD_Sunny)
+summary(m_MinTemps_Brunswick_Southport)
+summary(m_MinTemps_Brunswick_Sunny)
+summary(m_MinTemps_Southport_Sunny)
+
+```
+```{r weather_correlations_BHI_minAirTemp_plot, fig.height = 8, fig.width = 15}
+
+minTemps <- seq(from = -10, to = 40, by = 1)
+
+par(mfrow = c(2, 3), family = "serif", mar = c(4.5, 5.0, 0.5, 0.5), bty = "n", las = 1, cex.axis = 1.2, cex.lab = 1.2, cex.main = 1.3)
+
+plot(corMinAir$brunswick, corMinAir$BALD, pch = 16, col = rgb(40, 40, 40, alpha = 40, maxColorValue = 255), 
+     xlab = "Min Air Temp - Brunswick Airport", xlim = c(-10, 40), ylab = "Min Air Temp - NCSU BALD", ylim = c(-10, 40), main = "")
+lines(minTemps, predict(m_MinTemps_BALD_Brunswick, newdata = list(brunswick = minTemps), se.fit = FALSE), lty = 1, lwd = 2, col = "blue")
+mtext(paste0("BALD = ", round(coef(m_MinTemps_BALD_Brunswick)[1], 3), 
+             ifelse(sign(coef(m_MinTemps_BALD_Brunswick)[2]) == 1, " + ", " - "),
+             abs(round(coef(m_MinTemps_BALD_Brunswick)[2], 3)), "Brunswick"),
+      side = 3, line = -2, cex = 0.8)
+mtext(paste0("Correlation = ", round(cor.test(corMinAir$brunswick, corMinAir$BALD, method = "pearson")$estimate, 4)),
+      side = 3, line = -3, cex = 0.8)
+
+plot(corMinAir$southport, corMinAir$BALD, pch = 16, col = rgb(40, 40, 40, alpha = 40, maxColorValue = 255), 
+     xlab = "Min Air Temp - Southport COOP", xlim = c(-10, 40), ylab = "Min Air Temp - NCSU BALD", ylim = c(-10, 40), main = "")
+lines(minTemps, predict(m_MinTemps_BALD_Southport, newdata = list(southport = minTemps), se.fit = FALSE), lty = 1, lwd = 2, col = "blue")
+mtext(paste0("BALD = ", round(coef(m_MinTemps_BALD_Southport)[1], 3), ifelse(sign(coef(m_MinTemps_BALD_Southport)[2]) == 1, " + ", " - "),
+             abs(round(coef(m_MinTemps_BALD_Southport)[2], 3)), "Southport"),
+      side = 3, line = -2, cex = 0.8)
+mtext(paste0("Correlation = ", round(cor.test(corMinAir$southport, corMinAir$BALD, method = "pearson")$estimate, 4)),
+      side = 3, line = -3, cex = 0.8)
+
+plot(corMinAir$sunny_point, corMinAir$BALD, pch = 16, col = rgb(40, 40, 40, alpha = 40, maxColorValue = 255), 
+     xlab = "Min Air Temp - Sunny Point", xlim = c(-10, 40), ylab = "Min Air Temp - NCSU BALD", ylim = c(-10, 40), main = "")
+lines(minTemps, predict(m_MinTemps_BALD_Sunny, newdata = list(sunny_point = minTemps), se.fit = FALSE), lty = 1, lwd = 2, col = "blue")
+mtext(paste0("BALD = ", round(coef(m_MinTemps_BALD_Sunny)[1], 3), ifelse(sign(coef(m_MinTemps_BALD_Sunny)[2]) == 1, " + ", " - "),
+             abs(round(coef(m_MinTemps_BALD_Sunny)[2], 3)), "Sunny Point"),
+      side = 3, line = -2, cex = 0.8)
+mtext(paste0("Correlation = ", round(cor.test(corMinAir$sunny_point, corMinAir$BALD, method = "pearson")$estimate, 4)),
+      side = 3, line = -3, cex = 0.8)
+
+plot(corMinAir$southport, corMinAir$brunswick, pch = 16, col = rgb(40, 40, 40, alpha = 40, maxColorValue = 255), 
+     xlab = "Min Air Temp - Southport COOP", xlim = c(-10, 40), ylab = "Min Air Temp - Brunswick Airport", ylim = c(-10, 40), main = "")
+lines(minTemps, predict(m_MinTemps_Brunswick_Southport, newdata = list(southport = minTemps), se.fit = FALSE), lty = 1, lwd = 2, col = "blue")
+mtext(paste0("Brunswick = ", round(coef(m_MinTemps_Brunswick_Southport)[1], 3), ifelse(sign(coef(m_MinTemps_Brunswick_Southport)[2]) == 1, " + ", " - "),
+             abs(round(coef(m_MinTemps_Brunswick_Southport)[2], 3)), "Southport"),
+      side = 3, line = -2, cex = 0.8)
+mtext(paste0("Correlation = ", round(cor.test(corMinAir$southport, corMinAir$brunswick, method = "pearson")$estimate, 4)),
+      side = 3, line = -3, cex = 0.8)
+
+plot(corMinAir$sunny_point, corMinAir$brunswick, pch = 16, col = rgb(40, 40, 40, alpha = 40, maxColorValue = 255), 
+     xlab = "Min Air Temp - Sunny Point", xlim = c(-10, 40), ylab = "Min Air Temp - Brunswick Airport", ylim = c(-10, 40), main = "")
+lines(minTemps, predict(m_MinTemps_Brunswick_Sunny, newdata = list(sunny_point = minTemps), se.fit = FALSE), lty = 1, lwd = 2, col = "blue")
+mtext(paste0("Brunswick = ", round(coef(m_MinTemps_Brunswick_Sunny)[1], 3), ifelse(sign(coef(m_MinTemps_Brunswick_Sunny)[2]) == 1, " + ", " - "),
+             abs(round(coef(m_MinTemps_Brunswick_Sunny)[2], 3)), "Sunny_Point"),
+      side = 3, line = -2, cex = 0.8)
+mtext(paste0("Correlation = ", round(cor.test(corMinAir$sunny_point, corMinAir$brunswick, method = "pearson")$estimate, 4)),
+      side = 3, line = -3, cex = 0.8)
+
+plot(corMinAir$sunny_point, corMinAir$southport, pch = 16, col = rgb(40, 40, 40, alpha = 40, maxColorValue = 255), 
+     xlab = "Min Air Temp - Sunny Point", xlim = c(-10, 40), ylab = "Min Air Temp - Southport COOP", ylim = c(-10, 40), main = "")
+lines(minTemps, predict(m_MinTemps_Southport_Sunny, newdata = list(sunny_point = minTemps), se.fit = FALSE), lty = 1, lwd = 2, col = "blue")
+mtext(paste0("Southport = ", round(coef(m_MinTemps_Southport_Sunny)[1], 3), ifelse(sign(coef(m_MinTemps_Southport_Sunny)[2]) == 1, " + ", " - "),
+             abs(round(coef(m_MinTemps_Southport_Sunny)[2], 3)), "Sunny_Point"),
+      side = 3, line = -2, cex = 0.8)
+mtext(paste0("Correlation = ", round(cor.test(corMinAir$sunny_point, corMinAir$southport, method = "pearson")$estimate, 4)),
+      side = 3, line = -3, cex = 0.8)
+
+```
+  
+\newpage  
+  
+## Average Daily Air Temperature  
+  
+As the Southport COOP station does not report daily average temperatures, the next comparison does not include this station. Average daily air temperatures were extremely well correlated across each combination of stations. Correlations with Bald Head Island (NCSU BALD 2015-2022) were 99.1% (Brunswick Airport) and 98.8% (Sunny Point). 
+  
+```{r weather_correlations_BHI_avgAirTemp_stats}
+
+# Assemble average air temperature data
+corAvgAir <- as.data.frame(cbind(weather_BHI[weather_BHI$station == "Brunswick Airport",]$avg_air_temp, 
+                                 weather_BHI[weather_BHI$station == "NCSU BALD",]$avg_air_temp,
+                                 weather_BHI[weather_BHI$station == "Sunny Point",]$avg_air_temp))
+colnames(corAvgAir) <- c("brunswick", "BALD", "sunny_point")
+
+# Pearson correlation tests
+cor.test(corAvgAir$brunswick, corAvgAir$BALD, method = "pearson")
+cor.test(corAvgAir$sunny_point, corAvgAir$BALD, method = "pearson")
+cor.test(corAvgAir$brunswick, corAvgAir$sunny_point, method = "pearson")
+
+# Linear relationships
+m_AvgTemps_BALD_Brunswick <- lm(BALD ~ brunswick, data = corAvgAir)
+m_AvgTemps_BALD_Sunny <- lm(BALD ~ sunny_point, data = corAvgAir)
+m_AvgTemps_Brunswick_Sunny <- lm(brunswick ~ sunny_point, data = corAvgAir)
+
+summary(m_AvgTemps_BALD_Brunswick)
+summary(m_AvgTemps_BALD_Sunny)
+summary(m_AvgTemps_Brunswick_Sunny)
+
+```
+```{r weather_correlations_BHI_avgAirTemp_plot, fig.height = 4, fig.width = 15}
+
+avgTemps <- seq(from = -10, to = 40, by = 1)
+
+par(mfrow = c(1, 3), family = "serif", mar = c(4.5, 5.0, 0.5, 0.5), bty = "n", las = 1, cex.axis = 1.2, cex.lab = 1.2, cex.main = 1.3)
+
+plot(corAvgAir$brunswick, corAvgAir$BALD, pch = 16, col = rgb(40, 40, 40, alpha = 40, maxColorValue = 255), 
+     xlab = "Avg Air Temp - Brunswick Airport", xlim = c(-10, 40), ylab = "Avg Air Temp - NCSU BALD", ylim = c(-10, 40), main = "")
+lines(avgTemps, predict(m_AvgTemps_BALD_Brunswick, newdata = list(brunswick = avgTemps), se.fit = FALSE), lty = 1, lwd = 2, col = "blue")
+mtext(paste0("BALD = ", round(coef(m_AvgTemps_BALD_Brunswick)[1], 3), 
+             ifelse(sign(coef(m_AvgTemps_BALD_Brunswick)[2]) == 1, " + ", " - "),
+             abs(round(coef(m_AvgTemps_BALD_Brunswick)[2], 3)), "Brunswick"),
+      side = 3, line = -2, cex = 0.8)
+mtext(paste0("Correlation = ", round(cor.test(corAvgAir$brunswick, corAvgAir$BALD, method = "pearson")$estimate, 4)),
+      side = 3, line = -3, cex = 0.8)
+
+plot(corAvgAir$sunny_point, corAvgAir$BALD, pch = 16, col = rgb(40, 40, 40, alpha = 40, maxColorValue = 255), 
+     xlab = "Avg Air Temp - Sunny Point", xlim = c(-10, 40), ylab = "Avg Air Temp - NCSU BALD", ylim = c(-10, 40), main = "")
+lines(avgTemps, predict(m_AvgTemps_BALD_Sunny, newdata = list(sunny_point = avgTemps), se.fit = FALSE), lty = 1, lwd = 2, col = "blue")
+mtext(paste0("BALD = ", round(coef(m_AvgTemps_BALD_Sunny)[1], 3), ifelse(sign(coef(m_AvgTemps_BALD_Sunny)[2]) == 1, " + ", " - "),
+             abs(round(coef(m_AvgTemps_BALD_Sunny)[2], 3)), "Sunny Point"),
+      side = 3, line = -2, cex = 0.8)
+mtext(paste0("Correlation = ", round(cor.test(corAvgAir$sunny_point, corAvgAir$BALD, method = "pearson")$estimate, 4)),
+      side = 3, line = -3, cex = 0.8)
+
+plot(corAvgAir$sunny_point, corAvgAir$brunswick, pch = 16, col = rgb(40, 40, 40, alpha = 40, maxColorValue = 255), 
+     xlab = "Avg Air Temp - Sunny Point", xlim = c(-10, 40), ylab = "Avg Air Temp - Brunswick Airport", ylim = c(-10, 40), main = "")
+lines(avgTemps, predict(m_AvgTemps_Brunswick_Sunny, newdata = list(sunny_point = avgTemps), se.fit = FALSE), lty = 1, lwd = 2, col = "blue")
+mtext(paste0("Brunswick = ", round(coef(m_AvgTemps_Brunswick_Sunny)[1], 3), ifelse(sign(coef(m_AvgTemps_Brunswick_Sunny)[2]) == 1, " + ", " - "),
+             abs(round(coef(m_AvgTemps_Brunswick_Sunny)[2], 3)), "Sunny_Point"),
+      side = 3, line = -2, cex = 0.8)
+mtext(paste0("Correlation = ", round(cor.test(corAvgAir$sunny_point, corAvgAir$brunswick, method = "pearson")$estimate, 4)),
+      side = 3, line = -3, cex = 0.8)
+
+```
+  
+\newpage  
+  
+## Daily Precipitation
+  
+As the Sunny Point station does not report precipitation, the next comparison does not include this station. Daily total precipitation was correlated between NCSU BALD and Brunswick Airport (74.4%) but not with Southport COOP (0%). **Precipitation observations from Southport COOP therefore cannot be extrapolated to Bald Head Island.**  
+  
+```{r weather_correlations_BHI_precip_stats}
+
+# Assemble daily precipitation data
+corPrecip <- as.data.frame(cbind(weather_BHI[weather_BHI$station == "Brunswick Airport",]$precipitation, 
+                                 weather_BHI[weather_BHI$station == "NCSU BALD",]$precipitation,
+                                 weather_BHI[weather_BHI$station == "Southport COOP",]$precipitation))
+colnames(corPrecip) <- c("brunswick", "BALD", "southport")
+corPrecip$BALD_binary <- ifelse(corPrecip$BALD == 0, 0, 1)
+corPrecip$brunswick_binary <- ifelse(corPrecip$brunswick == 0, 0, 1)
+
+# Pearson correlation tests
+cor.test(corPrecip$brunswick, corPrecip$BALD, method = "pearson")
+cor.test(corPrecip$southport, corPrecip$BALD, method = "pearson")
+cor.test(corPrecip$brunswick, corPrecip$southport, method = "pearson")
+
+#table(corPrecip$BALD_binary, corPrecip$brunswick_binary)
+
+# Linear relationships
+m_Precips_BALD_Brunswick <- lm(BALD ~ brunswick, data = corPrecip[corPrecip$brunswick_binary == 1,])
+m_Precips_BALD_Southport <- lm(BALD ~ southport, data = corPrecip)
+m_Precips_Brunswick_Southport <- lm(brunswick ~ southport, data = corPrecip)
+
+summary(m_Precips_BALD_Brunswick)
+summary(m_Precips_BALD_Southport)
+summary(m_Precips_Brunswick_Southport)
+
+```
+```{r weather_correlations_BHI_precip_plot, fig.height = 4, fig.width = 15}
+
+Precips <- seq(from = 0, to = 250, by = 1)
+
+par(mfrow = c(1, 3), family = "serif", mar = c(4.5, 5.0, 0.5, 0.5), bty = "n", las = 1, cex.axis = 1.2, cex.lab = 1.2, cex.main = 1.3)
+
+plot(corPrecip$brunswick, corPrecip$BALD, pch = 16, col = rgb(40, 40, 40, alpha = 40, maxColorValue = 255), 
+     xlab = "Precip (mm) - Brunswick Airport", ylab = "Precip (mm) - NCSU BALD", main = "")
+lines(Precips, predict(m_Precips_BALD_Brunswick, newdata = list(brunswick = Precips), se.fit = FALSE), lty = 1, lwd = 2, col = "blue")
+mtext(paste0("If Brunswick > 0, BALD = ", round(coef(m_Precips_BALD_Brunswick)[1], 3), ifelse(sign(coef(m_Precips_BALD_Brunswick)[2]) == 1, " + ", " - "),
+             abs(round(coef(m_Precips_BALD_Brunswick)[2], 3)), "Brunswick"),
+      side = 3, line = -2, cex = 0.8)
+mtext(paste0("Else, BALD = 0"), side = 3, line = -3, cex = 0.8)
+mtext(paste0("Correlation = ", round(cor.test(corPrecip$brunswick, corPrecip$BALD, method = "pearson")$estimate, 4)),
+      side = 3, line = -4, cex = 0.8)
+
+plot(corPrecip$southport, corPrecip$BALD, pch = 16, col = rgb(40, 40, 40, alpha = 40, maxColorValue = 255), 
+     xlab = "Precip (mm) - Southport COOP", ylab = "Precip (mm) - NCSU BALD", main = "")
+lines(Precips, predict(m_Precips_BALD_Southport, newdata = list(southport = Precips), se.fit = FALSE), lty = 1, lwd = 2, col = "blue")
+mtext(paste0("BALD = ", round(coef(m_Precips_BALD_Southport)[1], 3), ifelse(sign(coef(m_Precips_BALD_Southport)[2]) == 1, " + ", " - "),
+             abs(round(coef(m_Precips_BALD_Southport)[2], 3)), "Southport"),
+      side = 3, line = -2, cex = 0.8)
+mtext(paste0("Correlation = ", round(cor.test(corPrecip$southport, corPrecip$BALD, method = "pearson")$estimate, 4)),
+      side = 3, line = -3, cex = 0.8)
+
+plot(corPrecip$southport, corPrecip$brunswick, pch = 16, col = rgb(40, 40, 40, alpha = 40, maxColorValue = 255), 
+     xlab = "Precip (mm) - Southport COOP", ylab = "Precip (mm) - Brunswick Airport", main = "")
+lines(Precips, predict(m_Precips_Brunswick_Southport, newdata = list(southport = Precips), se.fit = FALSE), lty = 1, lwd = 2, col = "blue")
+mtext(paste0("Brunswick = ", round(coef(m_Precips_Brunswick_Southport)[1], 3), ifelse(sign(coef(m_Precips_Brunswick_Southport)[2]) == 1, " + ", " - "),
+             abs(round(coef(m_Precips_Brunswick_Southport)[2], 3)), "Southport"),
+      side = 3, line = -2, cex = 0.8)
+mtext(paste0("Correlation = ", round(cor.test(corPrecip$southport, corPrecip$brunswick, method = "pearson")$estimate, 4)),
+      side = 3, line = -3, cex = 0.8)
+
+```
+  
+\newpage  
+  
+## Average Wind Speed  
+  
+Wind speed is only available from the Brunswick Airport and Bald Head Islands stations. These stations showed good agreement with a correlation of 80.6%. Correlations in wind direction were not assessed here.  
+  
+```{r weather_correlations_BHI_windspeed_stats, fig.height = 4, fig.width = 5}
+
+# Assemble wind speed data
+corWindSpeed <- as.data.frame(cbind(weather_BHI[weather_BHI$station == "Brunswick Airport",]$avg_wind_speed, 
+                                              weather_BHI[weather_BHI$station == "NCSU BALD",]$avg_wind_speed))
+colnames(corWindSpeed) <- c("brunswick", "BALD")
+corWindSpeed <- corWindSpeed[complete.cases(corWindSpeed),]
+
+# Pearson correlation tests
+cor.test(corWindSpeed$brunswick, corWindSpeed$BALD, method = "pearson")
+
+# Linear relationships
+m_windSpeeds_BALD_Brunswick <- lm(BALD ~ brunswick, data = corWindSpeed)
+
+summary(m_windSpeeds_BALD_Brunswick)
+
+```
+```{r weather_correlations_BHI_windspeed_plot, fig.height = 4, fig.width = 5}
+
+windSpeeds <- seq(from = 0, to = 10, by = 0.1)
+
+par(mfrow = c(1, 1), family = "serif", mar = c(4.5, 5.0, 0.5, 0.5), bty = "n", las = 1, cex.axis = 1.2, cex.lab = 1.2, cex.main = 1.3)
+
+plot(corWindSpeed$brunswick, corWindSpeed$BALD, pch = 16, col = rgb(40, 40, 40, alpha = 40, maxColorValue = 255), 
+     xlab = "Wind Speed - Brunswick Airport", ylab = "Wind Speed - NCSU BALD", main = "")
+lines(windSpeeds, predict(m_windSpeeds_BALD_Brunswick, newdata = list(brunswick = windSpeeds), se.fit = FALSE), lty = 1, lwd = 2, col = "blue")
+mtext(paste0("BALD = ", round(coef(m_windSpeeds_BALD_Brunswick)[1], 3), ifelse(sign(coef(m_windSpeeds_BALD_Brunswick)[2]) == 1, " + ", " - "),
+             abs(round(coef(m_windSpeeds_BALD_Brunswick)[2], 3)), "Brunswick"),
+      side = 3, line = -2, adj = 0.1, cex = 0.8)
+mtext(paste0("Correlation = ", round(cor.test(corWindSpeed$brunswick, corWindSpeed$BALD, method = "pearson")$estimate, 4)),
+      side = 3, line = -3, adj = 0.2, cex = 0.8)
+
+```
+  
+\newpage  
+  
+# METEOROLOGICAL TIME SERIES  
+  
+```{r BHI_importMet, warning = FALSE, message = FALSE}
+
+BHI_Met <- read.csv("Appendix B Meteorological time series for Bald Head Island 1991-2023.csv", header = TRUE) 
+
+BHI_Met <- janitor::clean_names(BHI_Met)
+
+BHI_Met$date <- as.POSIXct(BHI_Met$date, format = "%m/%d/%Y")
+BHI_Met$max_air_temp <- as.numeric(BHI_Met$max_air_temp)
+BHI_Met$min_air_temp <- as.numeric(BHI_Met$min_air_temp)
+BHI_Met$avg_air_temp <- as.numeric(BHI_Met$avg_air_temp)
+BHI_Met$precipitation <- as.numeric(BHI_Met$precipitation)
+BHI_Met$avg_wind_speed <- as.numeric(BHI_Met$avg_wind_speed)
+BHI_Met$avg_wind_direction <- as.numeric(BHI_Met$avg_wind_direction)
+BHI_Met$max_solar_radiation <- as.numeric(BHI_Met$max_solar_radiation)
+
+```
+  
+Using these relationships, a single time series record was created to cover the Bald Head Island nesting dataset with as much meteorological information as possible. Data after 23 June 2015 was extracted from the NCSU Bald Head Island stations. Data prior to the NCSU installation was extrapolated from the Brunswick Airport, Sunny Point, or Southport stations (in that order) using the above statistical relationships as station data was available.  
+  
+```{r BHI_met_singleStream_plot, fig.width = 10, fig.height = 16, warning = FALSE, message = FALSE}
+
+par(mfrow = c(4, 1), family = "serif", mar = c(4.5, 5.0, 0.5, 0.5), bty = "n", las = 1, cex.axis = 1.2, cex.lab = 1.3, cex.main = 1.3)
+
+plot(BHI_Met$date, BHI_Met$min_air_temp, type = "l", lty = 1, lwd = 0, xlab = "Date", ylim = c(-10, 50), ylab = "Temperature (\u00B0C)", main = "",
+     xlim = c(as.POSIXct("1991-01-01", format = "%Y-%m-%d"), as.POSIXct("2024-01-01", format = "%Y-%m-%d")))
+rect(xleft = as.POSIXct("1991-01-01", format = "%Y-%m-%d"), as.POSIXct("2002-01-17", format = "%Y-%m-%d"), ytop = 43, ybottom = -10, 
+     col = rgb(0, 0, 0, alpha = 80, maxColorValue = 255), border = NA)
+mtext("Southport COOP", side = 3, line = -3, adj = 0.20, cex = 0.7)
+rect(xleft = as.POSIXct("2002-01-18", format = "%Y-%m-%d"), as.POSIXct("2002-02-23", format = "%Y-%m-%d"), ytop = 43, ybottom = -10, 
+     col = rgb(40, 40, 40, alpha = 65, maxColorValue = 255), border = NA)
+mtext("Sunny Point", side = 3, line = -3, adj = 0.35, cex = 0.7)
+rect(xleft = as.POSIXct("2002-02-24", format = "%Y-%m-%d"), as.POSIXct("2015-06-23", format = "%Y-%m-%d"), ytop = 43, ybottom = -10, 
+     col = rgb(40, 40, 40, alpha = 40, maxColorValue = 255), border = NA)
+mtext("Brunswick Airport", side = 3, line = -3, adj = 0.57, cex = 0.7)
+mtext("NCSU BALD/BHIC", side = 3, line = -3, adj = 0.90, cex = 0.7)
+lines(BHI_Met$date, BHI_Met$max_air_temp, lty = 1, lwd = 1, col = "red")
+lines(BHI_Met$date, BHI_Met$min_air_temp, lty = 1, lwd = 1, col = "blue")
+lines(BHI_Met$date, BHI_Met$avg_air_temp, lty = 1, lwd = 1, col = "black")
+legend("topleft", legend = c("Maximum", "Average", "Minimum"), lty = c(1,1,1), lwd = c(1,1,1), col = c("red", "black", "blue"), bty = 'n')
+
+plot(BHI_Met$date, BHI_Met$precipitation, type = "l", lty = 1, lwd = 0, col = "black", xlab = "Date", ylim = c(0, 160), ylab = "Precipitation (mm)", main = "",
+     xlim = c(as.POSIXct("1991-01-01", format = "%Y-%m-%d"), as.POSIXct("2024-01-01", format = "%Y-%m-%d")))
+rect(xleft = as.POSIXct("2002-02-24", format = "%Y-%m-%d"), as.POSIXct("2015-06-23", format = "%Y-%m-%d"), ytop = 150, ybottom = 0, 
+     col = rgb(40, 40, 40, alpha = 40, maxColorValue = 255), border = NA)
+mtext("Brunswick Airport", side = 3, line = -2, adj = 0.57, cex = 0.7)
+mtext("NCSU BALD/BHIC", side = 3, line = -2, adj = 0.90, cex = 0.7)
+lines(BHI_Met$date, BHI_Met$precipitation, lty = 1, lwd = 1, col = "black")
+
+plot(BHI_Met$date, BHI_Met$avg_wind_speed, type = "l", lty = 1, lwd = 0, col = "black", xlab = "Date", ylim = c(0, 16),
+     ylab = expression(paste("Wind Speed (m ", s^-1, ")")), main = "", 
+     xlim = c(as.POSIXct("1991-01-01", format = "%Y-%m-%d"), as.POSIXct("2024-01-01", format = "%Y-%m-%d")))
+rect(xleft = as.POSIXct("2002-02-24", format = "%Y-%m-%d"), as.POSIXct("2015-06-23", format = "%Y-%m-%d"), ytop = 15, ybottom = 0, 
+     col = rgb(40, 40, 40, alpha = 40, maxColorValue = 255), border = NA)
+mtext("Brunswick Airport", side = 3, line = -2, adj = 0.57, cex = 0.7)
+mtext("NCSU BALD/BHIC", side = 3, line = -2, adj = 0.90, cex = 0.7)
+lines(BHI_Met$date, BHI_Met$avg_wind_speed, lty = 1, lwd = 1, col = "black")
+
+plot(BHI_Met$date, BHI_Met$max_solar_radiation, type = "l", lty = 1, lwd = 1, col = "black", xlab = "Date", ylim = c(0, 1600),
+     ylab = expression(paste("Solar Radiation (W ", m^-2, ")")), main = "",
+     xlim = c(as.POSIXct("1991-01-01", format = "%Y-%m-%d"), as.POSIXct("2024-01-01", format = "%Y-%m-%d")))
+mtext("NCSU BALD/BHIC", side = 3, line = -2, adj = 0.90, cex = 0.7)
+
+```
+  
+\newpage  
+  
+# ANNUAL TRENDS  
+  
+Trends were investigated using either the full calendar year or just the sea turtle nesting and hatching season (May to October). If a particular week, month, or year in the relevant analysis was missing more than 25% of the observations for that grouping, the summary value for that group was replaced with "NA".  
+  
+```{r BHI_met_trendsAnnual, warning = FALSE, message = FALSE}
+
+# Calculate U component of wind direction
+BHI_windU <- NULL
+for(i in 1:length(BHI_Met$avg_wind_direction)){
+  BHI_windU[i] <- DirectionUV(Angle = BHI_Met$avg_wind_direction[i], Speed = BHI_Met$avg_wind_speed[i], Type = "Wind_Waves")[,1]
+}
+BHI_windU <- unlist(BHI_windU)
+
+# Calculate V component of wind direction
+BHI_windV <- NULL
+for(i in 1:length(BHI_Met$avg_wind_direction)){
+  BHI_windV[i] <- DirectionUV(Angle = BHI_Met$avg_wind_direction[i], Speed = BHI_Met$avg_wind_speed[i], Type = "Wind_Waves")[,2]
+}
+BHI_windV <- unlist(BHI_windV)
+
+BHI_Met$WindU <- BHI_windU
+BHI_Met$WindV <- BHI_windV
+
+#----
+
+stationID <- "Bald Head Island"
+
+missingThreshold <- 25 # if grouping is missing more than this threshold, the grouping value is assigned NA
+
+#------
+
+# Calculate mean/SD/missing percentage by Month and Year for the full calendar year
+BHI_MonthYear_Full <- BHI_Met %>%
+  group_by(year, month) %>%
+  summarise(meanAvgAir = round(mean(avg_air_temp, na.rm = TRUE), 2), 
+            sdAvgAir = round(sd(avg_air_temp, na.rm = TRUE), 2),
+            missAvgTemp = round(length(avg_air_temp[is.na(avg_air_temp)]) / length(date), 3) * 100,
+            meanMaxAir = round(mean(max_air_temp, na.rm = TRUE), 2), 
+            sdMaxAir = round(sd(max_air_temp, na.rm = TRUE), 2),
+            maxMaxAir = max(max_air_temp, na.rm = TRUE),
+            missMaxTemp = round(length(max_air_temp[is.na(max_air_temp)]) / length(date), 3) * 100,
+            meanPrecip = round(mean(precipitation, na.rm = TRUE), 2),
+            sdPrecip = round(sd(precipitation, na.rm = TRUE), 2),
+            maxPrecip = max(precipitation, na.rm = TRUE),
+            missPrecip = round(length(precipitation[is.na(precipitation)]) / length(date), 3) * 100,
+            meanWindSpeed = round(mean(avg_wind_speed, na.rm = TRUE), 2), 
+            sdWindSpeed = round(sd(avg_wind_speed, na.rm = TRUE), 2),
+            maxWindSpeed = max(avg_wind_speed, na.rm = TRUE),
+            meanWindDir = MeanDirection(Ucomp = WindU, Vcomp = WindV, sourceDirectionUV = TRUE, Type = "Wind_Waves"),
+            missWind = round(length(avg_wind_speed[is.na(avg_wind_speed)]) / length(date), 3) * 100,
+            meanSolarRad = round(mean(max_solar_radiation, na.rm = TRUE), 2),
+            sdSolarRad = round(sd(max_solar_radiation, na.rm = TRUE), 2),
+            missSolarRad = round(length(max_solar_radiation[is.na(max_solar_radiation)]) / length(date), 3) * 100)
+
+# Replace observations missing more than threshold with NA
+BHI_MonthYear_Full <- BHI_MonthYear_Full %>% mutate_all(~ifelse(is.infinite(.), NA, .))
+BHI_MonthYear_Full <- BHI_MonthYear_Full %>% mutate_all(~ifelse(is.nan(.), NA, .))
+
+toReplace <- with(BHI_MonthYear_Full, missAvgTemp > missingThreshold)
+BHI_MonthYear_Full$meanAvgAir[toReplace] <- NA
+BHI_MonthYear_Full$sdAvgAir[toReplace] <- NA
+
+toReplace <- with(BHI_MonthYear_Full, missMaxTemp > missingThreshold)
+BHI_MonthYear_Full$meanMaxAir[toReplace] <- NA
+BHI_MonthYear_Full$sdMaxAir[toReplace] <- NA
+BHI_MonthYear_Full$maxMaxAir[toReplace] <- NA
+
+toReplace <- with(BHI_MonthYear_Full, missPrecip > missingThreshold)
+BHI_MonthYear_Full$meanPrecip[toReplace] <- NA
+BHI_MonthYear_Full$sdPrecip[toReplace] <- NA
+BHI_MonthYear_Full$maxPrecip[toReplace] <- NA
+
+toReplace <- with(BHI_MonthYear_Full, missWind > missingThreshold)
+BHI_MonthYear_Full$meanWindSpeed[toReplace] <- NA
+BHI_MonthYear_Full$sdWindSpeed[toReplace] <- NA
+BHI_MonthYear_Full$maxWindSpeed[toReplace] <- NA
+BHI_MonthYear_Full$meanWindDir[toReplace] <- NA
+
+toReplace <- with(BHI_MonthYear_Full, missSolarRad > missingThreshold)
+BHI_MonthYear_Full$meanSolarRad[toReplace] <- NA
+BHI_MonthYear_Full$sdSolarRad[toReplace] <- NA
+
+#------
+
+# Calculate mean/SD/missing percentage by Year for the full calendar year
+BHI_Year_Full <- BHI_Met %>%
+  group_by(year) %>%
+  summarise(meanAvgAir = round(mean(avg_air_temp, na.rm = TRUE), 2), 
+            sdAvgAir = round(sd(avg_air_temp, na.rm = TRUE), 2),
+            missAvgTemp = round(length(avg_air_temp[is.na(avg_air_temp)]) / length(date), 3) * 100,
+            meanMaxAir = round(mean(max_air_temp, na.rm = TRUE), 2), 
+            sdMaxAir = round(sd(max_air_temp, na.rm = TRUE), 2),
+            maxMaxAir = max(max_air_temp, na.rm = TRUE),
+            missMaxTemp = round(length(max_air_temp[is.na(max_air_temp)]) / length(date), 3) * 100,
+            meanPrecip = round(mean(precipitation, na.rm = TRUE), 2),
+            sdPrecip = round(sd(precipitation, na.rm = TRUE), 2),
+            maxPrecip = max(precipitation, na.rm = TRUE),
+            missPrecip = round(length(precipitation[is.na(precipitation)]) / length(date), 3) * 100,
+            meanWindSpeed = round(mean(avg_wind_speed, na.rm = TRUE), 2), 
+            sdWindSpeed = round(sd(avg_wind_speed, na.rm = TRUE), 2),
+            maxWindSpeed = max(avg_wind_speed, na.rm = TRUE),
+            meanWindDir = MeanDirection(Ucomp = WindU, Vcomp = WindV, sourceDirectionUV = TRUE, Type = "Wind_Waves"),
+            missWind = round(length(avg_wind_speed[is.na(avg_wind_speed)]) / length(date), 3) * 100,
+            meanSolarRad = round(mean(max_solar_radiation, na.rm = TRUE), 2),
+            sdSolarRad = round(sd(max_solar_radiation, na.rm = TRUE), 2),
+            missSolarRad = round(length(max_solar_radiation[is.na(max_solar_radiation)]) / length(date), 3) * 100)
+
+# Replace observations missing more than threshold with NA
+BHI_Year_Full <- BHI_Year_Full %>% mutate_all(~ifelse(is.infinite(.), NA, .))
+BHI_Year_Full <- BHI_Year_Full %>% mutate_all(~ifelse(is.nan(.), NA, .))
+
+toReplace <- with(BHI_Year_Full, missAvgTemp > missingThreshold)
+BHI_Year_Full$meanAvgAir[toReplace] <- NA
+BHI_Year_Full$sdAvgAir[toReplace] <- NA
+
+toReplace <- with(BHI_Year_Full, missMaxTemp > missingThreshold)
+BHI_Year_Full$meanMaxAir[toReplace] <- NA
+BHI_Year_Full$sdMaxAir[toReplace] <- NA
+BHI_Year_Full$maxMaxAir[toReplace] <- NA
+
+toReplace <- with(BHI_Year_Full, missPrecip > missingThreshold)
+BHI_Year_Full$meanPrecip[toReplace] <- NA
+BHI_Year_Full$sdPrecip[toReplace] <- NA
+BHI_Year_Full$maxPrecip[toReplace] <- NA
+
+toReplace <- with(BHI_Year_Full, missWind > missingThreshold)
+BHI_Year_Full$meanWindSpeed[toReplace] <- NA
+BHI_Year_Full$sdWindSpeed[toReplace] <- NA
+BHI_Year_Full$maxWindSpeed[toReplace] <- NA
+BHI_Year_Full$meanWindDir[toReplace] <- NA
+
+toReplace <- with(BHI_Year_Full, missSolarRad > missingThreshold)
+BHI_Year_Full$meanSolarRad[toReplace] <- NA
+BHI_Year_Full$sdSolarRad[toReplace] <- NA
+
+#------
+
+# Calculate mean/SD/missing percentage by Month and Year for the nesting season only
+BHI_MonthYear_Turtle <- BHI_Met[which(BHI_Met$month >= 5 & BHI_Met$month <= 10),] %>%
+  group_by(year, month) %>%
+  summarise(meanAvgAir = round(mean(avg_air_temp, na.rm = TRUE), 2), 
+            sdAvgAir = round(sd(avg_air_temp, na.rm = TRUE), 2),
+            missAvgTemp = round(length(avg_air_temp[is.na(avg_air_temp)]) / length(date), 3) * 100,
+            meanMaxAir = round(mean(max_air_temp, na.rm = TRUE), 2), 
+            sdMaxAir = round(sd(max_air_temp, na.rm = TRUE), 2),
+            maxMaxAir = max(max_air_temp, na.rm = TRUE),
+            missMaxTemp = round(length(max_air_temp[is.na(max_air_temp)]) / length(date), 3) * 100,
+            meanPrecip = round(mean(precipitation, na.rm = TRUE), 2),
+            sdPrecip = round(sd(precipitation, na.rm = TRUE), 2),
+            maxPrecip = max(precipitation, na.rm = TRUE),
+            missPrecip = round(length(precipitation[is.na(precipitation)]) / length(date), 3) * 100,
+            meanWindSpeed = round(mean(avg_wind_speed, na.rm = TRUE), 2), 
+            sdWindSpeed = round(sd(avg_wind_speed, na.rm = TRUE), 2),
+            maxWindSpeed = max(avg_wind_speed, na.rm = TRUE),
+            meanWindDir = MeanDirection(Ucomp = WindU, Vcomp = WindV, sourceDirectionUV = TRUE, Type = "Wind_Waves"),
+            missWind = round(length(avg_wind_speed[is.na(avg_wind_speed)]) / length(date), 3) * 100,
+            meanSolarRad = round(mean(max_solar_radiation, na.rm = TRUE), 2),
+            sdSolarRad = round(sd(max_solar_radiation, na.rm = TRUE), 2),
+            missSolarRad = round(length(max_solar_radiation[is.na(max_solar_radiation)]) / length(date), 3) * 100)
+
+# Replace observations missing more than threshold with NA
+BHI_MonthYear_Turtle <- BHI_MonthYear_Turtle %>% mutate_all(~ifelse(is.infinite(.), NA, .))
+BHI_MonthYear_Turtle <- BHI_MonthYear_Turtle %>% mutate_all(~ifelse(is.nan(.), NA, .))
+
+toReplace <- with(BHI_MonthYear_Turtle, missAvgTemp > missingThreshold)
+BHI_MonthYear_Turtle$meanAvgAir[toReplace] <- NA
+BHI_MonthYear_Turtle$sdAvgAir[toReplace] <- NA
+
+toReplace <- with(BHI_MonthYear_Turtle, missMaxTemp > missingThreshold)
+BHI_MonthYear_Turtle$meanMaxAir[toReplace] <- NA
+BHI_MonthYear_Turtle$sdMaxAir[toReplace] <- NA
+BHI_MonthYear_Turtle$maxMaxAir[toReplace] <- NA
+
+toReplace <- with(BHI_MonthYear_Turtle, missPrecip > missingThreshold)
+BHI_MonthYear_Turtle$meanPrecip[toReplace] <- NA
+BHI_MonthYear_Turtle$sdPrecip[toReplace] <- NA
+BHI_MonthYear_Turtle$maxPrecip[toReplace] <- NA
+
+toReplace <- with(BHI_MonthYear_Turtle, missWind > missingThreshold)
+BHI_MonthYear_Turtle$meanWindSpeed[toReplace] <- NA
+BHI_MonthYear_Turtle$sdWindSpeed[toReplace] <- NA
+BHI_MonthYear_Turtle$maxWindSpeed[toReplace] <- NA
+BHI_MonthYear_Turtle$meanWindDir[toReplace] <- NA
+
+toReplace <- with(BHI_MonthYear_Turtle, missSolarRad > missingThreshold)
+BHI_MonthYear_Turtle$meanSolarRad[toReplace] <- NA
+BHI_MonthYear_Turtle$sdSolarRad[toReplace] <- NA
+
+#------
+
+# Calculate mean/SD/missing percentage by Year for the nesting season only
+BHI_Year_Turtle <- BHI_Met[which(BHI_Met$month >= 5 & BHI_Met$month <= 10),] %>%
+  group_by(year) %>%
+  summarise(meanAvgAir = round(mean(avg_air_temp, na.rm = TRUE), 2), 
+            sdAvgAir = round(sd(avg_air_temp, na.rm = TRUE), 2),
+            missAvgTemp = round(length(avg_air_temp[is.na(avg_air_temp)]) / length(date), 3) * 100,
+            meanMaxAir = round(mean(max_air_temp, na.rm = TRUE), 2), 
+            sdMaxAir = round(sd(max_air_temp, na.rm = TRUE), 2),
+            maxMaxAir = max(max_air_temp, na.rm = TRUE),
+            missMaxTemp = round(length(max_air_temp[is.na(max_air_temp)]) / length(date), 3) * 100,
+            meanPrecip = round(mean(precipitation, na.rm = TRUE), 2),
+            sdPrecip = round(sd(precipitation, na.rm = TRUE), 2),
+            maxPrecip = max(precipitation, na.rm = TRUE),
+            missPrecip = round(length(precipitation[is.na(precipitation)]) / length(date), 3) * 100,
+            meanWindSpeed = round(mean(avg_wind_speed, na.rm = TRUE), 2), 
+            sdWindSpeed = round(sd(avg_wind_speed, na.rm = TRUE), 2),
+            maxWindSpeed = max(avg_wind_speed, na.rm = TRUE),
+            meanWindDir = MeanDirection(Ucomp = WindU, Vcomp = WindV, sourceDirectionUV = TRUE, Type = "Wind_Waves"),
+            missWind = round(length(avg_wind_speed[is.na(avg_wind_speed)]) / length(date), 3) * 100,
+            meanSolarRad = round(mean(max_solar_radiation, na.rm = TRUE), 2),
+            sdSolarRad = round(sd(max_solar_radiation, na.rm = TRUE), 2),
+            missSolarRad = round(length(max_solar_radiation[is.na(max_solar_radiation)]) / length(date), 3) * 100)
+
+# Replace observations missing more than threshold with NA
+BHI_Year_Turtle <- BHI_Year_Turtle %>% mutate_all(~ifelse(is.infinite(.), NA, .))
+BHI_Year_Turtle <- BHI_Year_Turtle %>% mutate_all(~ifelse(is.nan(.), NA, .))
+
+toReplace <- with(BHI_Year_Turtle, missAvgTemp > missingThreshold)
+BHI_Year_Turtle$meanAvgAir[toReplace] <- NA
+BHI_Year_Turtle$sdAvgAir[toReplace] <- NA
+
+toReplace <- with(BHI_Year_Turtle, missMaxTemp > missingThreshold)
+BHI_Year_Turtle$meanMaxAir[toReplace] <- NA
+BHI_Year_Turtle$sdMaxAir[toReplace] <- NA
+BHI_Year_Turtle$maxMaxAir[toReplace] <- NA
+
+toReplace <- with(BHI_Year_Turtle, missPrecip > missingThreshold)
+BHI_Year_Turtle$meanPrecip[toReplace] <- NA
+BHI_Year_Turtle$sdPrecip[toReplace] <- NA
+BHI_Year_Turtle$maxPrecip[toReplace] <- NA
+
+toReplace <- with(BHI_Year_Turtle, missWind > missingThreshold)
+BHI_Year_Turtle$meanWindSpeed[toReplace] <- NA
+BHI_Year_Turtle$sdWindSpeed[toReplace] <- NA
+BHI_Year_Turtle$maxWindSpeed[toReplace] <- NA
+BHI_Year_Turtle$meanWindDir[toReplace] <- NA
+
+toReplace <- with(BHI_Year_Turtle, missSolarRad > missingThreshold)
+BHI_Year_Turtle$meanSolarRad[toReplace] <- NA
+BHI_Year_Turtle$sdSolarRad[toReplace] <- NA
+
+```
+  
+```{r BHI_met_trends_YearFull_table}
+
+knitr::kable(BHI_Year_Full, caption = "Full-year meteorological conditions for Bald Head Island from 1991 - 2023")
+
+```
+  
+\newpage  
+  
+```{r BHI_met_trends_YearTurtle_table}
+
+knitr::kable(BHI_Year_Turtle, caption = "Turtle season (May - October) meteorological conditions for Bald Head Island from 1991 - 2023")
+
+```
+  
+\newpage  
+  
+```{r BHI_met_trends_Year_plot, fig.width = 12, fig.height = 20, warning = FALSE, message = FALSE}
+
+# Average Air Temperature
+
+Years1 <- c(2002:2023)
+
+m_BHImet_YearFull_avgTemp <- mgcv::gam(meanAvgAir ~ s(year), data = BHI_Year_Full)
+m_BHImet_YearFull_avgTemp_predict <- mgcv::predict.gam(m_BHImet_YearFull_avgTemp, newdata = list(year = Years1), se.fit = TRUE)
+
+m_BHImet_YearFull_avgTemp_fit <- m_BHImet_YearFull_avgTemp_predict$fit
+m_BHImet_YearFull_avgTemp_upper <- m_BHImet_YearFull_avgTemp_predict$fit + (1.96 * m_BHImet_YearFull_avgTemp_predict$se.fit)
+m_BHImet_YearFull_avgTemp_lower <- m_BHImet_YearFull_avgTemp_predict$fit - (1.96 * m_BHImet_YearFull_avgTemp_predict$se.fit)
+
+
+
+m_BHImet_YearTurtle_avgTemp <- mgcv::gam(meanAvgAir ~ s(year), data = BHI_Year_Turtle)
+m_BHImet_YearTurtle_avgTemp_predict <- mgcv::predict.gam(m_BHImet_YearTurtle_avgTemp, newdata = list(year = Years1), se.fit = TRUE)
+
+m_BHImet_YearTurtle_avgTemp_fit <- m_BHImet_YearTurtle_avgTemp_predict$fit
+m_BHImet_YearTurtle_avgTemp_upper <- m_BHImet_YearTurtle_avgTemp_predict$fit + (1.96 * m_BHImet_YearTurtle_avgTemp_predict$se.fit)
+m_BHImet_YearTurtle_avgTemp_lower <- m_BHImet_YearTurtle_avgTemp_predict$fit - (1.96 * m_BHImet_YearTurtle_avgTemp_predict$se.fit)
+
+# Maximum Air Temperature
+
+Years0 <- c(1991:2023)
+
+m_BHImet_YearFull_maxTemp <- mgcv::gam(meanMaxAir ~ s(year), data = BHI_Year_Full)
+m_BHImet_YearFull_maxTemp_predict <- mgcv::predict.gam(m_BHImet_YearFull_maxTemp, newdata = list(year = Years0), se.fit = TRUE)
+
+m_BHImet_YearFull_maxTemp_fit <- m_BHImet_YearFull_maxTemp_predict$fit
+m_BHImet_YearFull_maxTemp_upper <- m_BHImet_YearFull_maxTemp_predict$fit + (1.96 * m_BHImet_YearFull_maxTemp_predict$se.fit)
+m_BHImet_YearFull_maxTemp_lower <- m_BHImet_YearFull_maxTemp_predict$fit - (1.96 * m_BHImet_YearFull_maxTemp_predict$se.fit)
+
+
+
+m_BHImet_YearTurtle_maxTemp <- mgcv::gam(meanMaxAir ~ s(year), data = BHI_Year_Turtle)
+m_BHImet_YearTurtle_maxTemp_predict <- mgcv::predict.gam(m_BHImet_YearTurtle_maxTemp, newdata = list(year = Years0), se.fit = TRUE)
+
+m_BHImet_YearTurtle_maxTemp_fit <- m_BHImet_YearTurtle_maxTemp_predict$fit
+m_BHImet_YearTurtle_maxTemp_upper <- m_BHImet_YearTurtle_maxTemp_predict$fit + (1.96 * m_BHImet_YearTurtle_maxTemp_predict$se.fit)
+m_BHImet_YearTurtle_maxTemp_lower <- m_BHImet_YearTurtle_maxTemp_predict$fit - (1.96 * m_BHImet_YearTurtle_maxTemp_predict$se.fit)
+
+# Precipitation
+
+m_BHImet_YearFull_avgPrecip <- mgcv::gam(meanPrecip ~ s(year), data = BHI_Year_Full, family = "Gamma")
+m_BHImet_YearFull_avgPrecip_predict <- mgcv::predict.gam(m_BHImet_YearFull_avgPrecip, newdata = list(year = Years1), se.fit = TRUE)
+
+m_BHImet_YearFull_avgPrecip_fit <- 1/m_BHImet_YearFull_avgPrecip_predict$fit
+m_BHImet_YearFull_avgPrecip_upper <- 1/(m_BHImet_YearFull_avgPrecip_predict$fit + (1.96 * m_BHImet_YearFull_avgPrecip_predict$se.fit))
+m_BHImet_YearFull_avgPrecip_lower <- 1/(m_BHImet_YearFull_avgPrecip_predict$fit - (1.96 * m_BHImet_YearFull_avgPrecip_predict$se.fit))
+
+
+
+m_BHImet_YearTurtle_avgPrecip <- mgcv::gam(meanPrecip ~ s(year), data = BHI_Year_Turtle, family = "Gamma")
+m_BHImet_YearTurtle_avgPrecip_predict <- mgcv::predict.gam(m_BHImet_YearTurtle_avgPrecip, newdata = list(year = Years1), se.fit = TRUE)
+
+m_BHImet_YearTurtle_avgPrecip_fit <- 1/m_BHImet_YearTurtle_avgPrecip_predict$fit
+m_BHImet_YearTurtle_avgPrecip_upper <- 1/(m_BHImet_YearTurtle_avgPrecip_predict$fit + (1.96 * m_BHImet_YearTurtle_avgPrecip_predict$se.fit))
+m_BHImet_YearTurtle_avgPrecip_lower <- 1/(m_BHImet_YearTurtle_avgPrecip_predict$fit - (1.96 * m_BHImet_YearTurtle_avgPrecip_predict$se.fit))
+
+# Average Wind Speed
+
+m_BHImet_YearFull_avgWind <- mgcv::gam(meanWindSpeed ~ s(year), data = BHI_Year_Full)
+m_BHImet_YearFull_avgWind_predict <- mgcv::predict.gam(m_BHImet_YearFull_avgWind, newdata = list(year = Years1), se.fit = TRUE)
+
+m_BHImet_YearFull_avgWind_fit <- m_BHImet_YearFull_avgWind_predict$fit
+m_BHImet_YearFull_avgWind_upper <- m_BHImet_YearFull_avgWind_predict$fit + (1.96 * m_BHImet_YearFull_avgWind_predict$se.fit)
+m_BHImet_YearFull_avgWind_lower <- m_BHImet_YearFull_avgWind_predict$fit - (1.96 * m_BHImet_YearFull_avgWind_predict$se.fit)
+
+
+
+m_BHImet_YearTurtle_avgWind <- mgcv::gam(meanWindSpeed ~ s(year), data = BHI_Year_Turtle)
+m_BHImet_YearTurtle_avgWind_predict <- mgcv::predict.gam(m_BHImet_YearTurtle_avgWind, newdata = list(year = Years1), se.fit = TRUE)
+
+m_BHImet_YearTurtle_avgWind_fit <- m_BHImet_YearTurtle_avgWind_predict$fit
+m_BHImet_YearTurtle_avgWind_upper <- m_BHImet_YearTurtle_avgWind_predict$fit + (1.96 * m_BHImet_YearTurtle_avgWind_predict$se.fit)
+m_BHImet_YearTurtle_avgWind_lower <- m_BHImet_YearTurtle_avgWind_predict$fit - (1.96 * m_BHImet_YearTurtle_avgWind_predict$se.fit)
+
+# Average Solar Radiation
+
+Years3 <- c(2015:2023)
+
+m_BHImet_YearFull_avgSolar <- mgcv::gam(meanSolarRad ~ s(year, k = 7), data = BHI_Year_Full)
+m_BHImet_YearFull_avgSolar_predict <- mgcv::predict.gam(m_BHImet_YearFull_avgSolar, newdata = list(year = Years3), se.fit = TRUE)
+
+m_BHImet_YearFull_avgSolar_fit <- m_BHImet_YearFull_avgSolar_predict$fit
+m_BHImet_YearFull_avgSolar_upper <- m_BHImet_YearFull_avgSolar_predict$fit + (1.96 * m_BHImet_YearFull_avgSolar_predict$se.fit)
+m_BHImet_YearFull_avgSolar_lower <- m_BHImet_YearFull_avgSolar_predict$fit - (1.96 * m_BHImet_YearFull_avgSolar_predict$se.fit)
+
+
+
+m_BHImet_YearTurtle_avgSolar <- mgcv::gam(meanSolarRad ~ s(year, k = 7), data = BHI_Year_Turtle)
+m_BHImet_YearTurtle_avgSolar_predict <- mgcv::predict.gam(m_BHImet_YearTurtle_avgSolar, newdata = list(year = Years3), se.fit = TRUE)
+
+m_BHImet_YearTurtle_avgSolar_fit <- m_BHImet_YearTurtle_avgSolar_predict$fit
+m_BHImet_YearTurtle_avgSolar_upper <- m_BHImet_YearTurtle_avgSolar_predict$fit + (1.96 * m_BHImet_YearTurtle_avgSolar_predict$se.fit)
+m_BHImet_YearTurtle_avgSolar_lower <- m_BHImet_YearTurtle_avgSolar_predict$fit - (1.96 * m_BHImet_YearTurtle_avgSolar_predict$se.fit)
+
+#------------------
+
+par(mfrow = c(5, 2), family = "serif", mar = c(4.5, 5.0, 3.0, 0.5), bty = "n", las = 1, cex.axis = 1.2, cex.lab = 1.3, cex.main = 1.3)
+
+plot(Years1, m_BHImet_YearFull_avgTemp_fit, type = "l", lty = 1, lwd = 2, col = "black", xlim = c(2000, 2025), ylim = c(5, 32), 
+     xlab = "Year", ylab = "Air Temperature (\u00B0C)", main = "")
+lines(Years1, m_BHImet_YearFull_avgTemp_upper, lty = 2, lwd = 1, col = "black")
+lines(Years1, m_BHImet_YearFull_avgTemp_lower, lty = 2, lwd = 1, col = "black")
+arrows(x0 = BHI_Year_Full$year, y0 = BHI_Year_Full$meanAvgAir - BHI_Year_Full$sdAvgAir,
+       x1 = BHI_Year_Full$year, y1 = BHI_Year_Full$meanAvgAir + BHI_Year_Full$sdAvgAir, 
+       code = 3, angle = 90, length = 0.05, col = rgb(0, 0, 0, alpha = 75, maxColorValue = 255), lwd = 1, lty = 2)
+points(BHI_Year_Full$year, BHI_Year_Full$meanAvgAir, pch = 16, col = rgb(0, 0, 0, alpha = 75, maxColorValue = 255))
+legend("topleft", legend = c("Observed", "SD", "Trend", "95% CI"), pch = c(16, NA, NA, NA), lty = c(NA, 2, 1, 2), lwd = c(NA, 1, 1, 1), 
+       col = c("grey", "grey", "black", "black"), bty = 'n')
+mtext("A. Full Year - Average Mean Daily Temperature", side = 3, line = 1, adj = 0.05, outer = FALSE)
+
+plot(Years1, m_BHImet_YearTurtle_avgTemp_fit, type = "l", lty = 1, lwd = 2, col = "black", xlim = c(2000, 2025), ylim = c(18, 32), 
+     xlab = "Year", ylab = "Air Temperature (\u00B0C)", main = "")
+lines(Years1, m_BHImet_YearTurtle_avgTemp_upper, lty = 2, lwd = 1, col = "black")
+lines(Years1, m_BHImet_YearTurtle_avgTemp_lower, lty = 2, lwd = 1, col = "black")
+arrows(x0 = BHI_Year_Turtle$year, y0 = BHI_Year_Turtle$meanAvgAir - BHI_Year_Turtle$sdAvgAir,
+       x1 = BHI_Year_Turtle$year, y1 = BHI_Year_Turtle$meanAvgAir + BHI_Year_Turtle$sdAvgAir, 
+       code = 3, angle = 90, length = 0.05, col = rgb(0, 0, 0, alpha = 75, maxColorValue = 255), lwd = 1, lty = 2)
+points(BHI_Year_Turtle$year, BHI_Year_Turtle$meanAvgAir, pch = 16, col = rgb(0, 0, 0, alpha = 75, maxColorValue = 255))
+legend("topleft", legend = c("Observed", "SD", "Trend", "95% CI"), pch = c(16, NA, NA, NA), lty = c(NA, 2, 1, 2), lwd = c(NA, 1, 1, 1), 
+       col = c("grey", "grey", "black", "black"), bty = 'n')
+mtext("B. Turtle Season - Average Mean Daily Temperature", side = 3, line = 1, adj = 0.05, outer = FALSE)
+
+plot(Years0, m_BHImet_YearFull_maxTemp_fit, type = "l", lty = 1, lwd = 2, col = "black", xlim = c(1990, 2025), ylim = c(10, 45),
+     xlab = "Year", ylab = "Air Temperature (\u00B0C)", main = "")
+lines(Years0, m_BHImet_YearFull_maxTemp_upper, lty = 2, lwd = 1, col = "black")
+lines(Years0, m_BHImet_YearFull_maxTemp_lower, lty = 2, lwd = 1, col = "black")
+arrows(x0 = BHI_Year_Full$year, y0 = BHI_Year_Full$meanMaxAir - BHI_Year_Full$sdMaxAir,
+       x1 = BHI_Year_Full$year, y1 = BHI_Year_Full$meanMaxAir + BHI_Year_Full$sdMaxAir, 
+       code = 3, angle = 90, length = 0.05, col = rgb(0, 0, 0, alpha = 75, maxColorValue = 255), lwd = 1, lty = 2)
+points(BHI_Year_Full$year, BHI_Year_Full$meanMaxAir, pch = 16, col = rgb(0, 0, 0, alpha = 75, maxColorValue = 255))
+points(BHI_Year_Full$year, BHI_Year_Full$maxMaxAir, pch = 16, col = rgb(255, 0, 0, alpha = 75, maxColorValue = 255))
+
+legend("topleft", legend = c("Observed", "SD", "Max", "Trend", "95% CI"), pch = c(16, NA, 16, NA, NA), lty = c(NA, 2, NA, 1, 2), 
+       lwd = c(NA, 1, NA, 1, 1),  col = c("grey", "grey", "red", "black", "black"), bty = 'n')
+mtext("C. Full Year - Average Maximum Daily Temperature", side = 3, line = 1, adj = 0.05, outer = FALSE)
+
+plot(Years0, m_BHImet_YearTurtle_maxTemp_fit, type = "l", lty = 1, lwd = 2, col = "black", xlim = c(1990, 2025), ylim = c(18, 40), 
+     xlab = "Year", ylab = "Air Temperature (\u00B0C)", main = "")
+lines(Years0, m_BHImet_YearTurtle_maxTemp_upper, lty = 2, lwd = 1, col = "black")
+lines(Years0, m_BHImet_YearTurtle_maxTemp_lower, lty = 2, lwd = 1, col = "black")
+arrows(x0 = BHI_Year_Turtle$year, y0 = BHI_Year_Turtle$meanMaxAir - BHI_Year_Turtle$sdMaxAir,
+       x1 = BHI_Year_Turtle$year, y1 = BHI_Year_Turtle$meanMaxAir + BHI_Year_Turtle$sdMaxAir, 
+       code = 3, angle = 90, length = 0.05, col = rgb(0, 0, 0, alpha = 75, maxColorValue = 255), lwd = 1, lty = 2)
+points(BHI_Year_Turtle$year, BHI_Year_Turtle$meanMaxAir, pch = 16, col = rgb(0, 0, 0, alpha = 75, maxColorValue = 255))
+points(BHI_Year_Turtle$year, BHI_Year_Turtle$maxMaxAir, pch = 16, col = rgb(255, 0, 0, alpha = 75, maxColorValue = 255))
+
+legend("topleft", legend = c("Observed", "SD", "Max", "Trend", "95% CI"), pch = c(16, NA, 16, NA, NA), lty = c(NA, 2, NA, 1, 2), 
+       lwd = c(NA, 1, NA, 1, 1),  col = c("grey", "grey", "red", "black", "black"), bty = 'n')
+mtext("D. Turtle Season - Average Maximum Daily Temperature", side = 3, line = 1, adj = 0.05, outer = FALSE)
+
+plot(Years1, m_BHImet_YearFull_avgPrecip_fit, type = "l", lty = 1, lwd = 2, col = "black", xlim = c(2000, 2025), ylim = c(0, 20), 
+     xlab = "Year", ylab = "Precipitation (mm)", main = "")
+lines(Years1, m_BHImet_YearFull_avgPrecip_upper, lty = 2, lwd = 1, col = "black")
+lines(Years1, m_BHImet_YearFull_avgPrecip_lower, lty = 2, lwd = 1, col = "black")
+arrows(x0 = BHI_Year_Full$year, y0 = BHI_Year_Full$meanPrecip - BHI_Year_Full$sdPrecip,
+       x1 = BHI_Year_Full$year, y1 = BHI_Year_Full$meanPrecip + BHI_Year_Full$sdPrecip, 
+       code = 3, angle = 90, length = 0.05, col = rgb(0, 0, 0, alpha = 75, maxColorValue = 255), lwd = 1, lty = 2)
+points(BHI_Year_Full$year, BHI_Year_Full$meanPrecip, pch = 16, col = rgb(0, 0, 0, alpha = 75, maxColorValue = 255))
+legend("topleft", legend = c("Observed", "SD", "Trend", "95% CI"), pch = c(16, NA, NA, NA), lty = c(NA, 2, 1, 2), lwd = c(NA, 1, 1, 1), 
+       col = c("grey", "grey", "black", "black"), bty = 'n')
+mtext("E. Full Year - Average Daily Precipitation", side = 3, line = 1, adj = 0.05, outer = FALSE)
+
+plot(Years1, m_BHImet_YearTurtle_avgPrecip_fit, type = "l", lty = 1, lwd = 2, col = "black", xlim = c(2000, 2025), ylim = c(0, 25), 
+     xlab = "Year", ylab = "Precipitation (mm)", main = "")
+lines(Years1, m_BHImet_YearTurtle_avgPrecip_upper, lty = 2, lwd = 1, col = "black")
+lines(Years1, m_BHImet_YearTurtle_avgPrecip_lower, lty = 2, lwd = 1, col = "black")
+arrows(x0 = BHI_Year_Turtle$year, y0 = BHI_Year_Turtle$meanPrecip - BHI_Year_Turtle$sdPrecip,
+       x1 = BHI_Year_Turtle$year, y1 = BHI_Year_Turtle$meanPrecip + BHI_Year_Turtle$sdPrecip, 
+       code = 3, angle = 90, length = 0.05, col = rgb(0, 0, 0, alpha = 75, maxColorValue = 255), lwd = 1, lty = 2)
+points(BHI_Year_Turtle$year, BHI_Year_Turtle$meanPrecip, pch = 16, col = rgb(0, 0, 0, alpha = 75, maxColorValue = 255))
+
+legend("topleft", legend = c("Observed", "SD", "Trend", "95% CI"), pch = c(16, NA, NA, NA), lty = c(NA, 2, 1, 2), lwd = c(NA, 1, 1, 1), 
+       col = c("grey", "grey", "black", "black"), bty = 'n')
+mtext("F. Turtle Season - Average Daily Precipitation", side = 3, line = 1, adj = 0.05, outer = FALSE)
+
+plot(Years1, m_BHImet_YearFull_avgWind_fit, type = "l", lty = 1, lwd = 2, col = "black", xlim = c(2000, 2025), ylim = c(0, 6.5), 
+     xlab = "Year", ylab = expression(paste("Wind Speed (m ", s^-1, ")")), main = "")
+lines(Years1, m_BHImet_YearFull_avgWind_upper, lty = 2, lwd = 1, col = "black")
+lines(Years1, m_BHImet_YearFull_avgWind_lower, lty = 2, lwd = 1, col = "black")
+arrows(x0 = BHI_Year_Full$year, y0 = BHI_Year_Full$meanWindSpeed - BHI_Year_Full$sdWindSpeed,
+       x1 = BHI_Year_Full$year, y1 = BHI_Year_Full$meanWindSpeed + BHI_Year_Full$sdWindSpeed, 
+       code = 3, angle = 90, length = 0.05, col = rgb(0, 0, 0, alpha = 75, maxColorValue = 255), lwd = 1, lty = 2)
+points(BHI_Year_Full$year, BHI_Year_Full$meanWindSpeed, pch = 16, col = rgb(0, 0, 0, alpha = 75, maxColorValue = 255))
+legend("topleft", legend = c("Observed", "SD", "Trend", "95% CI"), pch = c(16, NA, NA, NA), lty = c(NA, 2, 1, 2), lwd = c(NA, 1, 1, 1), 
+       col = c("grey", "grey", "black", "black"), bty = 'n')
+mtext("G. Full Year - Average Daily Wind Speed", side = 3, line = 1, adj = 0.05, outer = FALSE)
+
+plot(Years1, m_BHImet_YearTurtle_avgWind_fit, type = "l", lty = 1, lwd = 2, col = "black", xlim = c(2000, 2025), ylim = c(0, 6.5), 
+     xlab = "Year", ylab = expression(paste("Wind Speed (m ", s^-1, ")")), main = "")
+lines(Years1, m_BHImet_YearTurtle_avgWind_upper, lty = 2, lwd = 1, col = "black")
+lines(Years1, m_BHImet_YearTurtle_avgWind_lower, lty = 2, lwd = 1, col = "black")
+arrows(x0 = BHI_Year_Turtle$year, y0 = BHI_Year_Turtle$meanWindSpeed - BHI_Year_Turtle$sdWindSpeed,
+       x1 = BHI_Year_Turtle$year, y1 = BHI_Year_Turtle$meanWindSpeed + BHI_Year_Turtle$sdWindSpeed, 
+       code = 3, angle = 90, length = 0.05, col = rgb(0, 0, 0, alpha = 75, maxColorValue = 255), lwd = 1, lty = 2)
+points(BHI_Year_Turtle$year, BHI_Year_Turtle$meanWindSpeed, pch = 16, col = rgb(0, 0, 0, alpha = 75, maxColorValue = 255))
+legend("topleft", legend = c("Observed", "SD", "Trend", "95% CI"), pch = c(16, NA, NA, NA), lty = c(NA, 2, 1, 2), lwd = c(NA, 1, 1, 1), 
+       col = c("grey", "grey", "black", "black"), bty = 'n')
+mtext("H. Turtle Season - Average Daily Wind Speed", side = 3, line = 1, adj = 0.05, outer = FALSE)
+
+plot(Years3, m_BHImet_YearFull_avgSolar_fit, type = "l", lty = 1, lwd = 2, col = "black", xlim = c(2014, 2025), ylim = c(200, 1300), 
+     xlab = "Year", ylab = expression(paste("Solar Radiation (W ", m^-2, ")")), main = "")
+lines(Years3, m_BHImet_YearFull_avgSolar_upper, lty = 2, lwd = 1, col = "black")
+lines(Years3, m_BHImet_YearFull_avgSolar_lower, lty = 2, lwd = 1, col = "black")
+arrows(x0 = BHI_Year_Full$year, y0 = BHI_Year_Full$meanSolarRad - BHI_Year_Full$sdSolarRad,
+       x1 = BHI_Year_Full$year, y1 = BHI_Year_Full$meanSolarRad + BHI_Year_Full$sdSolarRad, 
+       code = 3, angle = 90, length = 0.05, col = rgb(0, 0, 0, alpha = 75, maxColorValue = 255), lwd = 1, lty = 2)
+points(BHI_Year_Full$year, BHI_Year_Full$meanSolarRad, pch = 16, col = rgb(0, 0, 0, alpha = 75, maxColorValue = 255))
+legend("topleft", legend = c("Observed", "SD", "Trend", "95% CI"), pch = c(16, NA, NA, NA), lty = c(NA, 2, 1, 2), lwd = c(NA, 1, 1, 1), 
+       col = c("grey", "grey", "black", "black"), bty = 'n')
+mtext("I. Full Year - Average Daily Solar Radiation", side = 3, line = 1, adj = 0.05, outer = FALSE)
+
+plot(Years3, m_BHImet_YearTurtle_avgSolar_fit, type = "l", lty = 1, lwd = 2, col = "black", xlim = c(2014, 2025), ylim = c(600, 1400), 
+     xlab = "Year", ylab = expression(paste("Solar Radiation (W ", m^-2, ")")), main = "")
+lines(Years3, m_BHImet_YearTurtle_avgSolar_upper, lty = 2, lwd = 1, col = "black")
+lines(Years3, m_BHImet_YearTurtle_avgSolar_lower, lty = 2, lwd = 1, col = "black")
+arrows(x0 = BHI_Year_Turtle$year, y0 = BHI_Year_Turtle$meanSolarRad - BHI_Year_Turtle$sdSolarRad,
+       x1 = BHI_Year_Turtle$year, y1 = BHI_Year_Turtle$meanSolarRad + BHI_Year_Turtle$sdSolarRad, 
+       code = 3, angle = 90, length = 0.05, col = rgb(0, 0, 0, alpha = 75, maxColorValue = 255), lwd = 1, lty = 2)
+points(BHI_Year_Turtle$year, BHI_Year_Turtle$meanSolarRad, pch = 16, col = rgb(0, 0, 0, alpha = 75, maxColorValue = 255))
+legend("topleft", legend = c("Observed", "SD", "Trend", "95% CI"), pch = c(16, NA, NA, NA), lty = c(NA, 2, 1, 2), lwd = c(NA, 1, 1, 1), 
+       col = c("grey", "grey", "black", "black"), bty = 'n')
+mtext("J. Turtle Season - Average Daily Solar Radiation", side = 3, line = 1, adj = 0.05, outer = FALSE)
+
+```
+  
+\newpage  
+  
+Within the turtle nesting season, Bald Head Island has experienced significant annual increases in maximum daily air temperatures (0.111 $^\circ C$ yr^-1^, p << 0.001). A smaller increase was observed in average daily temperatures (0.031 $^\circ C$ yr^-1^, p < 0.001). Precipitation has been trending up (0.103 mm yr^-1^) but the GAM p value is marginal (p = 0.08), and worth further investigation.  
+  
+Solar radiation has been on an increasingly downward trend since 2021 (GAM p = 0.034).  
+  
+Annual wind speed showed no positive or negative linear trend (-0.014 m s^-1^, p = 0.287) but there are shorter trends visible within, including a rapid drop since 2020 (GAM p < 0.001).  
+  
+**Average Air Temperature**  
+  
+```{r BHI_met_trends_Year_statsAvgAir, warning = FALSE, message = FALSE}
+
+invisible(DHARMa::simulateResiduals(m_BHImet_YearTurtle_avgTemp, n = 5000, plot = TRUE))
+
+summary(m_BHImet_YearTurtle_avgTemp)
+
+paste0("Linear estimation of average air temperature (\u00B0C) increase per year: ", 
+       round(summary(lm(meanAvgAir ~ year, data = BHI_Year_Turtle))$coef[2,1], 3))
+
+```
+  
+**Maximum Air Temperature**  
+  
+```{r BHI_met_trends_Year_statsMaxAir, warning = FALSE, message = FALSE}
+
+invisible(DHARMa::simulateResiduals(m_BHImet_YearTurtle_maxTemp, n = 5000, plot = TRUE)) # What's up with residual plot?
+
+summary(m_BHImet_YearTurtle_maxTemp)
+
+paste0("Linear estimation of average air temperature (\u00B0C) increase per year: ", 
+       round(summary(lm(meanMaxAir ~ year, data = BHI_Year_Turtle))$coef[2,1], 3))
+
+```
+  
+**Average Daily Precipitation**  
+  
+```{r BHI_met_trends_Year_statsAvgPrecip, warning = FALSE, message = FALSE}
+
+invisible(DHARMa::simulateResiduals(m_BHImet_YearTurtle_avgPrecip, n = 5000, plot = TRUE)) # Issues with lower quartile
+
+summary(m_BHImet_YearTurtle_avgPrecip)
+#summary(lm(meanPrecip ~ year, data = BHI_Year_Turtle))
+paste0("Linear estimation of average precipitation (mm) increase per year: ", 
+       round(summary(lm(meanPrecip ~ year, data = BHI_Year_Turtle))$coef[2,1], 3))
+
+```
+  
+**Average Daily Wind Speed**  
+  
+```{r BHI_met_trends_Year_statsAvgWind, warning = FALSE, message = FALSE}
+
+invisible(DHARMa::simulateResiduals(m_BHImet_YearTurtle_avgWind, n = 5000, plot = TRUE))
+
+summary(m_BHImet_YearTurtle_avgWind)
+summary(lm(meanWindSpeed ~ year, data = BHI_Year_Turtle))
+#paste0("Linear estimation of average precipitation (mm) increase per year: ", 
+#       round(summary(lm(meanWindSpeed ~ year, data = BHI_Year_Turtle))$coef[2,1], 3))
+
+```
+  
+**Average Maximum Solar Radiation**  
+  
+Note: too few observations of annual solar radiation to fit DHARMa model plots.  
+  
+```{r BHI_met_trends_Year_statsAvgSolar, warning = FALSE, message = FALSE}
+
+#invisible(DHARMa::simulateResiduals(m_BHImet_YearTurtle_avgSolar, n = 5000, plot = TRUE))
+
+summary(m_BHImet_YearTurtle_avgSolar)
+paste0("Linear estimation of average solar radiation (W m-2) increase per year: ", 
+       round(summary(lm(meanSolarRad ~ year, data = BHI_Year_Turtle))$coef[2,1], 3))
+
+```
+  
+\newpage  
+  
+# MONTHLY AND WEEKLY MEANS  
+  
+Using the above time series, monthly and weekly means for each available variable were calculated across the full year. For some variables (e.g., maximum daily air temperature), the record is sufficiently long as to be representative of a climatology. Other variables (e.g., solar radiation), need more time before reaching this threshold.  
+  
+## By Month  
+  
+```{r BHI_met_trendsMonth, warning = FALSE, message = FALSE}
+
+# Calculate mean/SD/missing percentage by Month for the full calendar year
+BHI_Month <- BHI_Met %>%
+  group_by(month) %>%
+  summarise(meanAvgAir = round(mean(avg_air_temp, na.rm = TRUE), 2), 
+            sdAvgAir = round(sd(avg_air_temp, na.rm = TRUE), 2),
+            missAvgTemp = round(length(avg_air_temp[is.na(avg_air_temp)]) / length(date), 3) * 100,
+            meanMaxAir = round(mean(max_air_temp, na.rm = TRUE), 2), 
+            sdMaxAir = round(sd(max_air_temp, na.rm = TRUE), 2),
+            maxMaxAir = max(max_air_temp, na.rm = TRUE),
+            missMaxTemp = round(length(max_air_temp[is.na(max_air_temp)]) / length(date), 3) * 100,
+            meanPrecip = round(mean(precipitation, na.rm = TRUE), 2),
+            sdPrecip = round(sd(precipitation, na.rm = TRUE), 2),
+            maxPrecip = max(precipitation, na.rm = TRUE),
+            missPrecip = round(length(precipitation[is.na(precipitation)]) / length(date), 3) * 100,
+            meanWindSpeed = round(mean(avg_wind_speed, na.rm = TRUE), 2), 
+            sdWindSpeed = round(sd(avg_wind_speed, na.rm = TRUE), 2),
+            maxWindSpeed = max(avg_wind_speed, na.rm = TRUE),
+            meanWindDir = MeanDirection(Ucomp = WindU, Vcomp = WindV, Type = "Wind_Waves"),
+            missWind = round(length(avg_wind_speed[is.na(avg_wind_speed)]) / length(date), 3) * 100,
+            meanSolarRad = round(mean(max_solar_radiation, na.rm = TRUE), 2),
+            sdSolarRad = round(sd(max_solar_radiation, na.rm = TRUE), 2),
+            missSolarRad = round(length(max_solar_radiation[is.na(max_solar_radiation)]) / length(date), 3) * 100)
+
+# Replace observations missing more than threshold with NA
+BHI_Month <- BHI_Month %>% mutate_all(~ifelse(is.infinite(.), NA, .))
+BHI_Month <- BHI_Month %>% mutate_all(~ifelse(is.nan(.), NA, .))
+
+```
+  
+```{r BHI_met_trends_Month_table}
+
+knitr::kable(BHI_Month, caption = "Monthly meteorological conditions for Bald Head Island from 1991 - 2023")
+
+```
+  
+```{r BHI_met_trends_Month_plot, fig.width = 12, fig.height = 12, warning = FALSE, message = FALSE}
+
+Months <- c(1:12)
+
+# Average Air Temperature
+
+m_BHImet_Month_avgTemp <- mgcv::gam(meanAvgAir ~ s(month), data = BHI_Month)
+m_BHImet_Month_avgTemp_predict <- mgcv::predict.gam(m_BHImet_Month_avgTemp, newdata = list(month = Months), se.fit = TRUE)
+
+m_BHImet_Month_avgTemp_fit <- m_BHImet_Month_avgTemp_predict$fit
+m_BHImet_Month_avgTemp_upper <- m_BHImet_Month_avgTemp_predict$fit + (1.96 * m_BHImet_Month_avgTemp_predict$se.fit)
+m_BHImet_Month_avgTemp_lower <- m_BHImet_Month_avgTemp_predict$fit - (1.96 * m_BHImet_Month_avgTemp_predict$se.fit)
+
+# Maximum Air Temperature
+
+m_BHImet_Month_maxTemp <- mgcv::gam(meanMaxAir ~ s(month), data = BHI_Month)
+m_BHImet_Month_maxTemp_predict <- mgcv::predict.gam(m_BHImet_Month_maxTemp, newdata = list(month = Months), se.fit = TRUE)
+
+m_BHImet_Month_maxTemp_fit <- m_BHImet_Month_maxTemp_predict$fit
+m_BHImet_Month_maxTemp_upper <- m_BHImet_Month_maxTemp_predict$fit + (1.96 * m_BHImet_Month_maxTemp_predict$se.fit)
+m_BHImet_Month_maxTemp_lower <- m_BHImet_Month_maxTemp_predict$fit - (1.96 * m_BHImet_Month_maxTemp_predict$se.fit)
+
+# Precipitation
+
+m_BHImet_Month_avgPrecip <- mgcv::gam(meanPrecip ~ s(month), data = BHI_Month, family = "Gamma")
+m_BHImet_Month_avgPrecip_predict <- mgcv::predict.gam(m_BHImet_Month_avgPrecip, newdata = list(month = Months), se.fit = TRUE)
+
+m_BHImet_Month_avgPrecip_fit <- 1/m_BHImet_Month_avgPrecip_predict$fit
+m_BHImet_Month_avgPrecip_upper <- 1/(m_BHImet_Month_avgPrecip_predict$fit + (1.96 * m_BHImet_Month_avgPrecip_predict$se.fit))
+m_BHImet_Month_avgPrecip_lower <- 1/(m_BHImet_Month_avgPrecip_predict$fit - (1.96 * m_BHImet_Month_avgPrecip_predict$se.fit))
+
+# Average Wind Speed
+
+m_BHImet_Month_avgWind <- mgcv::gam(meanWindSpeed ~ s(month), data = BHI_Month)
+m_BHImet_Month_avgWind_predict <- mgcv::predict.gam(m_BHImet_Month_avgWind, newdata = list(month = Months), se.fit = TRUE)
+
+m_BHImet_Month_avgWind_fit <- m_BHImet_Month_avgWind_predict$fit
+m_BHImet_Month_avgWind_upper <- m_BHImet_Month_avgWind_predict$fit + (1.96 * m_BHImet_Month_avgWind_predict$se.fit)
+m_BHImet_Month_avgWind_lower <- m_BHImet_Month_avgWind_predict$fit - (1.96 * m_BHImet_Month_avgWind_predict$se.fit)
+
+# Average Solar Radiation
+
+m_BHImet_Month_avgSolar <- mgcv::gam(meanSolarRad ~ s(month), data = BHI_Month)
+m_BHImet_Month_avgSolar_predict <- mgcv::predict.gam(m_BHImet_Month_avgSolar, newdata = list(month = Months), se.fit = TRUE)
+
+m_BHImet_Month_avgSolar_fit <- m_BHImet_Month_avgSolar_predict$fit
+m_BHImet_Month_avgSolar_upper <- m_BHImet_Month_avgSolar_predict$fit + (1.96 * m_BHImet_Month_avgSolar_predict$se.fit)
+m_BHImet_Month_avgSolar_lower <- m_BHImet_Month_avgSolar_predict$fit - (1.96 * m_BHImet_Month_avgSolar_predict$se.fit)
+
+#------------------
+
+par(mfrow = c(3, 2), family = "serif", mar = c(4.5, 5.0, 3.0, 0.5), bty = "n", las = 1, cex.axis = 1.2, cex.lab = 1.3, cex.main = 1.3)
+
+
+plot(Months, m_BHImet_Month_avgTemp_fit, type = "l", lty = 1, lwd = 2, col = "black", xlim = c(1, 12), ylim = c(0, 30), 
+     xlab = "Month", ylab = "Air Temperature (\u00B0C)", main = "")
+lines(Months, m_BHImet_Month_avgTemp_upper, lty = 2, lwd = 1, col = "black")
+lines(Months, m_BHImet_Month_avgTemp_lower, lty = 2, lwd = 1, col = "black")
+arrows(x0 = BHI_Month$month, y0 = BHI_Month$meanAvgAir - BHI_Month$sdAvgAir,
+       x1 = BHI_Month$month, y1 = BHI_Month$meanAvgAir + BHI_Month$sdAvgAir, 
+       code = 3, angle = 90, length = 0.05, col = rgb(0, 0, 0, alpha = 75, maxColorValue = 255), lwd = 1, lty = 2)
+points(BHI_Month$month, BHI_Month$meanAvgAir, pch = 16, col = rgb(0, 0, 0, alpha = 75, maxColorValue = 255))
+legend("topleft", legend = c("Observed", "SD", "Trend", "95% CI"), pch = c(16, NA, NA, NA), lty = c(NA, 2, 1, 2), lwd = c(NA, 1, 1, 1), 
+       col = c("grey", "grey", "black", "black"), bty = 'n')
+mtext("A. Average Mean Daily Temperature by Month", side = 3, line = 1, adj = 0.05, outer = FALSE)
+
+
+plot(Months, m_BHImet_Month_maxTemp_fit, type = "l", lty = 1, lwd = 2, col = "black", xlim = c(1, 12), ylim = c(5, 45),
+     xlab = "Month", ylab = "Air Temperature (\u00B0C)", main = "")
+lines(Months, m_BHImet_Month_maxTemp_upper, lty = 2, lwd = 1, col = "black")
+lines(Months, m_BHImet_Month_maxTemp_lower, lty = 2, lwd = 1, col = "black")
+arrows(x0 = BHI_Month$month, y0 = BHI_Month$meanMaxAir - BHI_Month$sdMaxAir,
+       x1 = BHI_Month$month, y1 = BHI_Month$meanMaxAir + BHI_Month$sdMaxAir, 
+       code = 3, angle = 90, length = 0.05, col = rgb(0, 0, 0, alpha = 75, maxColorValue = 255), lwd = 1, lty = 2)
+points(BHI_Month$month, BHI_Month$meanMaxAir, pch = 16, col = rgb(0, 0, 0, alpha = 75, maxColorValue = 255))
+points(BHI_Month$month, BHI_Month$maxMaxAir, pch = 16, col = rgb(255, 0, 0, alpha = 75, maxColorValue = 255))
+legend("topleft", legend = c("Observed", "SD", "Max", "Trend", "95% CI"), pch = c(16, NA, 16, NA, NA), lty = c(NA, 2, NA, 1, 2), 
+       lwd = c(NA, 1, NA, 1, 1),  col = c("grey", "grey", "red", "black", "black"), bty = 'n')
+mtext("B. Average Maximum Daily Temperature by Month", side = 3, line = 1, adj = 0.05, outer = FALSE)
+
+
+plot(Months, m_BHImet_Month_avgPrecip_fit, type = "l", lty = 1, lwd = 2, col = "black", xlim = c(1, 12), ylim = c(0, 20), 
+     xlab = "Month", ylab = "Precipitation (mm)", main = "")
+lines(Months, m_BHImet_Month_avgPrecip_upper, lty = 2, lwd = 1, col = "black")
+lines(Months, m_BHImet_Month_avgPrecip_lower, lty = 2, lwd = 1, col = "black")
+arrows(x0 = BHI_Month$month, y0 = BHI_Month$meanPrecip - BHI_Month$sdPrecip,
+       x1 = BHI_Month$month, y1 = BHI_Month$meanPrecip + BHI_Month$sdPrecip, 
+       code = 3, angle = 90, length = 0.05, col = rgb(0, 0, 0, alpha = 75, maxColorValue = 255), lwd = 1, lty = 2)
+points(BHI_Month$month, BHI_Month$meanPrecip, pch = 16, col = rgb(0, 0, 0, alpha = 75, maxColorValue = 255))
+legend("topleft", legend = c("Observed", "SD", "Trend", "95% CI"), pch = c(16, NA, NA, NA), lty = c(NA, 2, 1, 2), lwd = c(NA, 1, 1, 1), 
+       col = c("grey", "grey", "black", "black"), bty = 'n')
+mtext("C. Average Daily Precipitation by Month", side = 3, line = 1, adj = 0.05, outer = FALSE)
+
+
+plot(Months, m_BHImet_Month_avgWind_fit, type = "l", lty = 1, lwd = 2, col = "black", xlim = c(1, 12), ylim = c(1, 6), 
+     xlab = "Month", ylab = expression(paste("Wind Speed (m ", s^-1, ")")), main = "")
+lines(Months, m_BHImet_Month_avgWind_upper, lty = 2, lwd = 1, col = "black")
+lines(Months, m_BHImet_Month_avgWind_lower, lty = 2, lwd = 1, col = "black")
+arrows(x0 = BHI_Month$month, y0 = BHI_Month$meanWindSpeed - BHI_Month$sdWindSpeed,
+       x1 = BHI_Month$month, y1 = BHI_Month$meanWindSpeed + BHI_Month$sdWindSpeed, 
+       code = 3, angle = 90, length = 0.05, col = rgb(0, 0, 0, alpha = 75, maxColorValue = 255), lwd = 1, lty = 2)
+points(BHI_Month$month, BHI_Month$meanWindSpeed, pch = 16, col = rgb(0, 0, 0, alpha = 75, maxColorValue = 255))
+legend("topleft", legend = c("Observed", "SD", "Trend", "95% CI"), pch = c(16, NA, NA, NA), lty = c(NA, 2, 1, 2), lwd = c(NA, 1, 1, 1), 
+       col = c("grey", "grey", "black", "black"), bty = 'n')
+mtext("D. Average Daily Wind Speed by Month", side = 3, line = 1, adj = 0.05, outer = FALSE)
+
+
+plot(Months, m_BHImet_Month_avgSolar_fit, type = "l", lty = 1, lwd = 2, col = "black", xlim = c(1, 12), ylim = c(300, 1300), 
+     xlab = "Month", ylab = expression(paste("Solar Radiation (W ", m^-2, ")")), main = "")
+lines(Months, m_BHImet_Month_avgSolar_upper, lty = 2, lwd = 1, col = "black")
+lines(Months, m_BHImet_Month_avgSolar_lower, lty = 2, lwd = 1, col = "black")
+arrows(x0 = BHI_Month$month, y0 = BHI_Month$meanSolarRad - BHI_Month$sdSolarRad,
+       x1 = BHI_Month$month, y1 = BHI_Month$meanSolarRad + BHI_Month$sdSolarRad, 
+       code = 3, angle = 90, length = 0.05, col = rgb(0, 0, 0, alpha = 75, maxColorValue = 255), lwd = 1, lty = 2)
+points(BHI_Month$month, BHI_Month$meanSolarRad, pch = 16, col = rgb(0, 0, 0, alpha = 75, maxColorValue = 255))
+legend("topleft", legend = c("Observed", "SD", "Trend", "95% CI"), pch = c(16, NA, NA, NA), lty = c(NA, 2, 1, 2), lwd = c(NA, 1, 1, 1), 
+       col = c("grey", "grey", "black", "black"), bty = 'n')
+mtext("E. Average Daily Solar Radiation by Month", side = 3, line = 1, adj = 0.05, outer = FALSE)
+
+```
+  
+\newpage  
+  
+## By Week  
+  
+```{r BHI_met_trendsWeek, warning = FALSE, message = FALSE}
+
+# Calculate mean/SD/missing percentage by Week for the full calendar year
+BHI_Week <- BHI_Met %>%
+  group_by(week) %>%
+  summarise(meanAvgAir = round(mean(avg_air_temp, na.rm = TRUE), 2), 
+            sdAvgAir = round(sd(avg_air_temp, na.rm = TRUE), 2),
+            missAvgTemp = round(length(avg_air_temp[is.na(avg_air_temp)]) / length(date), 3) * 100,
+            meanMaxAir = round(mean(max_air_temp, na.rm = TRUE), 2), 
+            sdMaxAir = round(sd(max_air_temp, na.rm = TRUE), 2),
+            maxMaxAir = max(max_air_temp, na.rm = TRUE),
+            missMaxTemp = round(length(max_air_temp[is.na(max_air_temp)]) / length(date), 3) * 100,
+            meanPrecip = round(mean(precipitation, na.rm = TRUE), 2),
+            sdPrecip = round(sd(precipitation, na.rm = TRUE), 2),
+            maxPrecip = max(precipitation, na.rm = TRUE),
+            missPrecip = round(length(precipitation[is.na(precipitation)]) / length(date), 3) * 100,
+            meanWindSpeed = round(mean(avg_wind_speed, na.rm = TRUE), 2), 
+            sdWindSpeed = round(sd(avg_wind_speed, na.rm = TRUE), 2),
+            maxWindSpeed = max(avg_wind_speed, na.rm = TRUE),
+            meanWindDir = MeanDirection(Ucomp = WindU, Vcomp = WindV, Type = "Wind_Waves"),
+            missWind = round(length(avg_wind_speed[is.na(avg_wind_speed)]) / length(date), 3) * 100,
+            meanSolarRad = round(mean(max_solar_radiation, na.rm = TRUE), 2),
+            sdSolarRad = round(sd(max_solar_radiation, na.rm = TRUE), 2),
+            missSolarRad = round(length(max_solar_radiation[is.na(max_solar_radiation)]) / length(date), 3) * 100)
+BHI_Week <- BHI_Week[-which(BHI_Week$week == 54),]
+
+# Replace observations missing more than threshold with NA
+BHI_Week <- BHI_Week %>% mutate_all(~ifelse(is.infinite(.), NA, .))
+BHI_Week <- BHI_Week %>% mutate_all(~ifelse(is.nan(.), NA, .))
+
+```
+  
+```{r BHI_met_trends_Week_table}
+
+knitr::kable(BHI_Week, caption = "Weekly meteorological conditions for Bald Head Island from 1991 - 2023")
+
+```
+  
+```{r BHI_met_trends_Week_plot, fig.width = 12, fig.height = 12, warning = FALSE, message = FALSE}
+
+Weeks <- c(1:53)
+
+# Average Air Temperature
+
+m_BHImet_Week_avgTemp <- mgcv::gam(meanAvgAir ~ s(week), data = BHI_Week)
+m_BHImet_Week_avgTemp_predict <- mgcv::predict.gam(m_BHImet_Week_avgTemp, newdata = list(week = Weeks), se.fit = TRUE)
+
+m_BHImet_Week_avgTemp_fit <- m_BHImet_Week_avgTemp_predict$fit
+m_BHImet_Week_avgTemp_upper <- m_BHImet_Week_avgTemp_predict$fit + (1.96 * m_BHImet_Week_avgTemp_predict$se.fit)
+m_BHImet_Week_avgTemp_lower <- m_BHImet_Week_avgTemp_predict$fit - (1.96 * m_BHImet_Week_avgTemp_predict$se.fit)
+
+# Maximum Air Temperature
+
+m_BHImet_Week_maxTemp <- mgcv::gam(meanMaxAir ~ s(week), data = BHI_Week)
+m_BHImet_Week_maxTemp_predict <- mgcv::predict.gam(m_BHImet_Week_maxTemp, newdata = list(week = Weeks), se.fit = TRUE)
+
+m_BHImet_Week_maxTemp_fit <- m_BHImet_Week_maxTemp_predict$fit
+m_BHImet_Week_maxTemp_upper <- m_BHImet_Week_maxTemp_predict$fit + (1.96 * m_BHImet_Week_maxTemp_predict$se.fit)
+m_BHImet_Week_maxTemp_lower <- m_BHImet_Week_maxTemp_predict$fit - (1.96 * m_BHImet_Week_maxTemp_predict$se.fit)
+
+# Precipitation
+
+m_BHImet_Week_avgPrecip <- mgcv::gam(meanPrecip ~ s(week), data = BHI_Week, family = "Gamma")
+m_BHImet_Week_avgPrecip_predict <- mgcv::predict.gam(m_BHImet_Week_avgPrecip, newdata = list(week = Weeks), se.fit = TRUE)
+
+m_BHImet_Week_avgPrecip_fit <- 1/m_BHImet_Week_avgPrecip_predict$fit
+m_BHImet_Week_avgPrecip_upper <- 1/(m_BHImet_Week_avgPrecip_predict$fit + (1.96 * m_BHImet_Week_avgPrecip_predict$se.fit))
+m_BHImet_Week_avgPrecip_lower <- 1/(m_BHImet_Week_avgPrecip_predict$fit - (1.96 * m_BHImet_Week_avgPrecip_predict$se.fit))
+
+# Average Wind Speed
+
+m_BHImet_Week_avgWind <- mgcv::gam(meanWindSpeed ~ s(week), data = BHI_Week)
+m_BHImet_Week_avgWind_predict <- mgcv::predict.gam(m_BHImet_Week_avgWind, newdata = list(week = Weeks), se.fit = TRUE)
+
+m_BHImet_Week_avgWind_fit <- m_BHImet_Week_avgWind_predict$fit
+m_BHImet_Week_avgWind_upper <- m_BHImet_Week_avgWind_predict$fit + (1.96 * m_BHImet_Week_avgWind_predict$se.fit)
+m_BHImet_Week_avgWind_lower <- m_BHImet_Week_avgWind_predict$fit - (1.96 * m_BHImet_Week_avgWind_predict$se.fit)
+
+# Average Solar Radiation
+
+m_BHImet_Week_avgSolar <- mgcv::gam(meanSolarRad ~ s(week), data = BHI_Week)
+m_BHImet_Week_avgSolar_predict <- mgcv::predict.gam(m_BHImet_Week_avgSolar, newdata = list(week = Weeks), se.fit = TRUE)
+
+m_BHImet_Week_avgSolar_fit <- m_BHImet_Week_avgSolar_predict$fit
+m_BHImet_Week_avgSolar_upper <- m_BHImet_Week_avgSolar_predict$fit + (1.96 * m_BHImet_Week_avgSolar_predict$se.fit)
+m_BHImet_Week_avgSolar_lower <- m_BHImet_Week_avgSolar_predict$fit - (1.96 * m_BHImet_Week_avgSolar_predict$se.fit)
+
+#------------------
+
+par(mfrow = c(3, 2), family = "serif", mar = c(4.5, 5.0, 3.0, 0.5), bty = "n", las = 1, cex.axis = 1.2, cex.lab = 1.3, cex.main = 1.3)
+
+
+plot(Weeks, m_BHImet_Week_avgTemp_fit, type = "l", lty = 1, lwd = 2, col = "black", xlim = c(1, 53), ylim = c(0, 30), 
+     xlab = "Week", ylab = "Air Temperature (\u00B0C)", main = "")
+lines(Weeks, m_BHImet_Week_avgTemp_upper, lty = 2, lwd = 1, col = "black")
+lines(Weeks, m_BHImet_Week_avgTemp_lower, lty = 2, lwd = 1, col = "black")
+arrows(x0 = BHI_Week$week, y0 = BHI_Week$meanAvgAir - BHI_Week$sdAvgAir,
+       x1 = BHI_Week$week, y1 = BHI_Week$meanAvgAir + BHI_Week$sdAvgAir, 
+       code = 3, angle = 90, length = 0.05, col = rgb(0, 0, 0, alpha = 75, maxColorValue = 255), lwd = 1, lty = 2)
+points(BHI_Week$week, BHI_Week$meanAvgAir, pch = 16, col = rgb(0, 0, 0, alpha = 75, maxColorValue = 255))
+legend("topleft", legend = c("Observed", "SD", "Trend", "95% CI"), pch = c(16, NA, NA, NA), lty = c(NA, 2, 1, 2), lwd = c(NA, 1, 1, 1), 
+       col = c("grey", "grey", "black", "black"), bty = 'n')
+mtext("A. Average Mean Daily Temperature by Week", side = 3, line = 1, adj = 0.05, outer = FALSE)
+
+
+plot(Weeks, m_BHImet_Week_maxTemp_fit, type = "l", lty = 1, lwd = 2, col = "black", xlim = c(1, 53), ylim = c(5, 45),
+     xlab = "Week", ylab = "Air Temperature (\u00B0C)", main = "")
+lines(Weeks, m_BHImet_Week_maxTemp_upper, lty = 2, lwd = 1, col = "black")
+lines(Weeks, m_BHImet_Week_maxTemp_lower, lty = 2, lwd = 1, col = "black")
+arrows(x0 = BHI_Week$week, y0 = BHI_Week$meanMaxAir - BHI_Week$sdMaxAir,
+       x1 = BHI_Week$week, y1 = BHI_Week$meanMaxAir + BHI_Week$sdMaxAir, 
+       code = 3, angle = 90, length = 0.05, col = rgb(0, 0, 0, alpha = 75, maxColorValue = 255), lwd = 1, lty = 2)
+points(BHI_Week$week, BHI_Week$meanMaxAir, pch = 16, col = rgb(0, 0, 0, alpha = 75, maxColorValue = 255))
+points(BHI_Week$week, BHI_Week$maxMaxAir, pch = 16, col = rgb(255, 0, 0, alpha = 75, maxColorValue = 255))
+legend("topleft", legend = c("Observed", "SD", "Max", "Trend", "95% CI"), pch = c(16, NA, 16, NA, NA), lty = c(NA, 2, NA, 1, 2), 
+       lwd = c(NA, 1, NA, 1, 1),  col = c("grey", "grey", "red", "black", "black"), bty = 'n')
+mtext("B. Average Maximum Daily Temperature by Week", side = 3, line = 1, adj = 0.05, outer = FALSE)
+
+
+plot(Weeks, m_BHImet_Week_avgPrecip_fit, type = "l", lty = 1, lwd = 2, col = "black", xlim = c(1, 53), ylim = c(0, 25), 
+     xlab = "Week", ylab = "Precipitation (mm)", main = "")
+lines(Weeks, m_BHImet_Week_avgPrecip_upper, lty = 2, lwd = 1, col = "black")
+lines(Weeks, m_BHImet_Week_avgPrecip_lower, lty = 2, lwd = 1, col = "black")
+arrows(x0 = BHI_Week$week, y0 = BHI_Week$meanPrecip - BHI_Week$sdPrecip,
+       x1 = BHI_Week$week, y1 = BHI_Week$meanPrecip + BHI_Week$sdPrecip, 
+       code = 3, angle = 90, length = 0.05, col = rgb(0, 0, 0, alpha = 75, maxColorValue = 255), lwd = 1, lty = 2)
+points(BHI_Week$week, BHI_Week$meanPrecip, pch = 16, col = rgb(0, 0, 0, alpha = 75, maxColorValue = 255))
+legend("topleft", legend = c("Observed", "SD", "Trend", "95% CI"), pch = c(16, NA, NA, NA), lty = c(NA, 2, 1, 2), lwd = c(NA, 1, 1, 1), 
+       col = c("grey", "grey", "black", "black"), bty = 'n')
+mtext("C. Average Daily Precipitation by Week", side = 3, line = 1, adj = 0.05, outer = FALSE)
+
+
+plot(Weeks, m_BHImet_Week_avgWind_fit, type = "l", lty = 1, lwd = 2, col = "black", xlim = c(1, 53), ylim = c(1, 6), 
+     xlab = "Week", ylab = expression(paste("Wind Speed (m ", s^-1, ")")), main = "")
+lines(Weeks, m_BHImet_Week_avgWind_upper, lty = 2, lwd = 1, col = "black")
+lines(Weeks, m_BHImet_Week_avgWind_lower, lty = 2, lwd = 1, col = "black")
+arrows(x0 = BHI_Week$week, y0 = BHI_Week$meanWindSpeed - BHI_Week$sdWindSpeed,
+       x1 = BHI_Week$week, y1 = BHI_Week$meanWindSpeed + BHI_Week$sdWindSpeed, 
+       code = 3, angle = 90, length = 0.05, col = rgb(0, 0, 0, alpha = 75, maxColorValue = 255), lwd = 1, lty = 2)
+points(BHI_Week$week, BHI_Week$meanWindSpeed, pch = 16, col = rgb(0, 0, 0, alpha = 75, maxColorValue = 255))
+legend("topleft", legend = c("Observed", "SD", "Trend", "95% CI"), pch = c(16, NA, NA, NA), lty = c(NA, 2, 1, 2), lwd = c(NA, 1, 1, 1), 
+       col = c("grey", "grey", "black", "black"), bty = 'n')
+mtext("D. Average Daily Wind Speed by Week", side = 3, line = 1, adj = 0.05, outer = FALSE)
+
+
+plot(Weeks, m_BHImet_Week_avgSolar_fit, type = "l", lty = 1, lwd = 2, col = "black", xlim = c(1, 53), ylim = c(200, 1300), 
+     xlab = "Week", ylab = expression(paste("Solar Radiation (W ", m^-2, ")")), main = "")
+lines(Weeks, m_BHImet_Week_avgSolar_upper, lty = 2, lwd = 1, col = "black")
+lines(Weeks, m_BHImet_Week_avgSolar_lower, lty = 2, lwd = 1, col = "black")
+arrows(x0 = BHI_Week$week, y0 = BHI_Week$meanSolarRad - BHI_Week$sdSolarRad,
+       x1 = BHI_Week$week, y1 = BHI_Week$meanSolarRad + BHI_Week$sdSolarRad, 
+       code = 3, angle = 90, length = 0.05, col = rgb(0, 0, 0, alpha = 75, maxColorValue = 255), lwd = 1, lty = 2)
+points(BHI_Week$week, BHI_Week$meanSolarRad, pch = 16, col = rgb(0, 0, 0, alpha = 75, maxColorValue = 255))
+legend("topleft", legend = c("Observed", "SD", "Trend", "95% CI"), pch = c(16, NA, NA, NA), lty = c(NA, 2, 1, 2), lwd = c(NA, 1, 1, 1), 
+       col = c("grey", "grey", "black", "black"), bty = 'n')
+mtext("E. Average Daily Solar Radiation by Week", side = 3, line = 1, adj = 0.05, outer = FALSE)
+
+```
+  
+  
+***  
+***  
+  
+\newpage  
+  
+# REFERENCES  
+  
+```{r r_session_info, R.options = list(width = 60)}
+
+report(sessionInfo()) # Reports the citation information for the packages used in this analysis
+
+```
+  
+  
+  
+  
+  
+  
+  
+  
