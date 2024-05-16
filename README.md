@@ -1,4 +1,4 @@
-# Recent_Increases_in_Incubation_Duration_in_NC
+# Recent Increases in Incubation Duration in North Carolina
 This repository houses the analysis code and other files relevant to the manuscript "Recent increases in male sea turtle hatchling production on a North Carolina, USA beach despite a warming climate".
 The manuscript has been submitted to "Global Change Biology" for publication consideration and peer review.
 
